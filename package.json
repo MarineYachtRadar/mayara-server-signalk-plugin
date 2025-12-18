@@ -17,7 +17,7 @@
   ],
   "signalk": {
     "displayName": "MaYaRa Radar (Server)",
-    "appIcon": "./public/assets/mayara_logo.png",
+    "appIcon": "assets/mayara_logo.png",
     "webapp": {
       "name": "MaYaRa Radar",
       "description": "Marine radar display connected to mayara-server",
@@ -38,7 +38,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/MarineYachtRadar/mayara-server-signalk-plugin"
+    "url": "git+https://github.com/MarineYachtRadar/mayara-server-signalk-plugin"
   },
   "author": "MarineYachtRadar Contributors",
   "license": "Apache-2.0"
