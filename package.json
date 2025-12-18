@@ -26,7 +26,6 @@
   },
   "files": [
     "plugin/**/*",
-    "public/**/*",
     "build.js"
   ],
   "engines": {

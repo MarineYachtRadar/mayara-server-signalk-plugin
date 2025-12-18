@@ -1,6 +1,81 @@
 # Deployment Guide
 
-This guide covers different deployment scenarios for mayara-server-signalk-plugin.
+This guide covers building, installing, and deploying mayara-server-signalk-plugin.
+
+## Building & Installing
+
+### Install from npm (Recommended)
+
+```bash
+cd ~/.signalk
+npm install @marineyachtradar/signalk-plugin
+```
+
+The postinstall script automatically downloads the GUI from `@marineyachtradar/mayara-gui`.
+
+### Install from Tarball
+
+For offline installation or testing unreleased versions:
+
+```bash
+# On development machine: create tarball with GUI included
+cd /path/to/mayara-server-signalk-plugin
+npm run build -- --pack
+
+# Copy .tgz to target machine, then:
+cd ~/.signalk
+npm install /path/to/marineyachtradar-signalk-plugin-x.x.x.tgz
+```
+
+### Build Options
+
+The `build.js` script supports several options:
+
+| Option | Description |
+|--------|-------------|
+| (none) | Copy GUI from `node_modules/@marineyachtradar/mayara-gui` |
+| `--local-gui` | Copy GUI from sibling `../mayara-gui` directory (for development) |
+| `--pack` | Create `.tgz` tarball with `public/` included |
+
+**Examples:**
+
+```bash
+# Standard build (uses npm mayara-gui)
+npm run build
+
+# Development: use local mayara-gui
+npm run build -- --local-gui
+
+# Create tarball for manual installation
+npm run build -- --pack
+
+# Development: local GUI + create tarball
+npm run build -- --local-gui --pack
+```
+
+### Development Setup
+
+For plugin development with live GUI changes:
+
+```bash
+# 1. Clone repos side-by-side
+cd ~/dev
+git clone https://github.com/MarineYachtRadar/mayara-gui
+git clone https://github.com/MarineYachtRadar/mayara-server-signalk-plugin
+
+# 2. Build with local GUI
+cd mayara-server-signalk-plugin
+npm run build -- --local-gui
+
+# 3. Link to SignalK
+cd ~/.signalk
+npm link ~/dev/mayara-server-signalk-plugin
+
+# 4. After GUI changes, rebuild:
+cd ~/dev/mayara-server-signalk-plugin
+npm run build -- --local-gui
+# Then restart SignalK
+```
 
 ## Prerequisites
 

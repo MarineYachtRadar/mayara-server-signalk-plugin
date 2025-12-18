@@ -4,15 +4,18 @@
  *
  * Downloads @marineyachtradar/mayara-gui from npm and copies GUI files to public/
  *
- * Usage: node build.js [--local-gui]
+ * Usage: node build.js [options]
  *   --local-gui  Use local mayara-gui instead of npm (for development)
+ *   --pack       Create a .tgz tarball with public/ included (for manual install)
  */
 
 const fs = require('fs')
 const path = require('path')
+const { execSync } = require('child_process')
 
 const args = process.argv.slice(2)
 const useLocalGui = args.includes('--local-gui')
+const createPack = args.includes('--pack')
 
 // Paths (relative to this script's directory)
 const scriptDir = __dirname
@@ -154,14 +157,6 @@ function setupGuiFromLocal() {
 function main() {
   console.log('=== MaYaRa SignalK Plugin Build ===\n')
 
-  // Check if public/ already exists with content (pre-built tarball)
-  const indexHtml = path.join(publicDest, 'index.html')
-  if (fs.existsSync(indexHtml) && !useLocalGui) {
-    console.log('GUI assets already present in public/, skipping build.\n')
-    console.log('=== Build complete ===')
-    return
-  }
-
   // Get GUI assets
   console.log('Setting up GUI assets...\n')
   if (useLocalGui) {
@@ -170,7 +165,38 @@ function main() {
     setupGuiFromNpm()
   }
 
-  console.log('=== Build complete ===')
+  // Create tarball if --pack flag is set
+  if (createPack) {
+    console.log('Creating tarball with public/ included...\n')
+
+    // Temporarily remove public/ from .npmignore
+    const npmignorePath = path.join(scriptDir, '.npmignore')
+    const npmignoreContent = fs.readFileSync(npmignorePath, 'utf8')
+    const npmignoreWithoutPublic = npmignoreContent.replace(/^public\/\n?/m, '')
+    fs.writeFileSync(npmignorePath, npmignoreWithoutPublic)
+
+    // Also temporarily add public/ to files in package.json
+    const pkgPath = path.join(scriptDir, 'package.json')
+    const pkgContent = fs.readFileSync(pkgPath, 'utf8')
+    const pkg = JSON.parse(pkgContent)
+    const originalFiles = [...pkg.files]
+    pkg.files.push('public/**/*')
+    fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n')
+
+    try {
+      // Run npm pack
+      execSync('npm pack', { stdio: 'inherit', cwd: scriptDir })
+      console.log('\nTarball created successfully!')
+    } finally {
+      // Restore .npmignore
+      fs.writeFileSync(npmignorePath, npmignoreContent)
+      // Restore package.json
+      pkg.files = originalFiles
+      fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n')
+    }
+  }
+
+  console.log('\n=== Build complete ===')
 }
 
 main()
