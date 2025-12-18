@@ -154,6 +154,14 @@ function setupGuiFromLocal() {
 function main() {
   console.log('=== MaYaRa SignalK Plugin Build ===\n')
 
+  // Check if public/ already exists with content (pre-built tarball)
+  const indexHtml = path.join(publicDest, 'index.html')
+  if (fs.existsSync(indexHtml) && !useLocalGui) {
+    console.log('GUI assets already present in public/, skipping build.\n')
+    console.log('=== Build complete ===')
+    return
+  }
+
   // Get GUI assets
   console.log('Setting up GUI assets...\n')
   if (useLocalGui) {
