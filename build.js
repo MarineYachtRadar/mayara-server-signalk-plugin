@@ -52,20 +52,52 @@ function copyDir(src, dest) {
 }
 
 /**
+ * Find mayara-gui in node_modules (handles npm hoisting)
+ */
+function findGuiPackage() {
+  // Possible locations for mayara-gui:
+  // 1. Nested in plugin's own node_modules (npm nested install)
+  // 2. Hoisted to parent node_modules (SignalK App Store installs to ~/.signalk/node_modules/)
+  //    Structure: ~/.signalk/node_modules/@marineyachtradar/signalk-plugin/
+  //               ~/.signalk/node_modules/@marineyachtradar/mayara-gui/
+  // 3. Local development (sibling directory)
+  const candidates = [
+    // Nested: <plugin>/node_modules/@marineyachtradar/mayara-gui
+    path.join(scriptDir, 'node_modules', '@marineyachtradar', 'mayara-gui'),
+    // Hoisted (scoped): <node_modules>/@marineyachtradar/<plugin> -> <node_modules>/@marineyachtradar/mayara-gui
+    path.join(scriptDir, '..', 'mayara-gui'),
+    // Hoisted (top-level): <node_modules>/@marineyachtradar/<plugin> -> <node_modules>/@marineyachtradar/mayara-gui
+    path.join(scriptDir, '..', '..', '@marineyachtradar', 'mayara-gui'),
+  ]
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate
+    }
+  }
+  return null
+}
+
+/**
  * Download GUI from npm and copy to public/
  */
 function setupGuiFromNpm() {
   console.log('Copying GUI from node_modules...\n')
 
-  // Dependencies should already be installed by npm install
-  // (this script runs as postinstall, so node_modules exists)
-  const guiSource = path.join(scriptDir, 'node_modules', '@marineyachtradar', 'mayara-gui')
+  // Find mayara-gui (handles npm hoisting where deps may be in parent node_modules)
+  const guiSource = findGuiPackage()
 
-  if (!fs.existsSync(guiSource)) {
-    console.error('Error: @marineyachtradar/mayara-gui not found in node_modules')
-    console.error('Make sure it is listed in package.json dependencies')
+  if (!guiSource) {
+    console.error('Error: @marineyachtradar/mayara-gui not found')
+    console.error('Searched locations:')
+    console.error('  - ' + path.join(scriptDir, 'node_modules', '@marineyachtradar', 'mayara-gui'))
+    console.error('  - ' + path.join(scriptDir, '..', 'mayara-gui'))
+    console.error('  - ' + path.join(scriptDir, '..', '..', '@marineyachtradar', 'mayara-gui'))
+    console.error('Make sure @marineyachtradar/mayara-gui is listed in package.json dependencies')
     process.exit(1)
   }
+
+  console.log('Found mayara-gui at: ' + guiSource)
 
   // Remove old public dir
   if (fs.existsSync(publicDest)) {
