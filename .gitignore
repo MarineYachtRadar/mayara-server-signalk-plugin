@@ -1,0 +1,8 @@
+.vscode/
+*.tgz
+*.log
+*.tmp
+node_modules/
+public/
+.DS_Store
+.env

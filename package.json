@@ -1,0 +1,45 @@
+{
+  "name": "@marineyachtradar/signalk-plugin",
+  "version": "0.1.0",
+  "description": "MaYaRa Radar - Connect SignalK to mayara-server",
+  "main": "plugin/index.js",
+  "scripts": {
+    "build": "node build.js",
+    "postinstall": "node build.js"
+  },
+  "keywords": [
+    "signalk-node-server-plugin",
+    "signalk-webapp",
+    "signalk-category-instruments",
+    "radar",
+    "marine",
+    "mayara"
+  ],
+  "signalk": {
+    "displayName": "MaYaRa Radar (Server)",
+    "appIcon": "./public/assets/mayara_logo.png",
+    "webapp": {
+      "name": "MaYaRa Radar",
+      "description": "Marine radar display connected to mayara-server",
+      "location": "/plugins/@marineyachtradar/signalk-plugin/"
+    }
+  },
+  "files": [
+    "plugin/**/*",
+    "public/**/*",
+    "build.js"
+  ],
+  "engines": {
+    "signalk": ">=2.0.0"
+  },
+  "dependencies": {
+    "@marineyachtradar/mayara-gui": "^0.5.3",
+    "ws": "^8.14.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MarineYachtRadar/mayara-server-signalk-plugin"
+  },
+  "author": "MarineYachtRadar Contributors",
+  "license": "Apache-2.0"
+}
