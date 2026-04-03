@@ -16,15 +16,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Checkout mayara-server GUI
+        uses: actions/checkout@v4
+        with:
+          repository: MarineYachtRadar/mayara-server
+          path: mayara-server
+          sparse-checkout: web/gui
+
       - name: Clean workspace
-        run: git clean -xfd
+        run: git clean -xfd -e mayara-server
 
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
-      # Ensure npm 11.5.1 or later is installed
       - name: Update npm
         run: npm install -g npm@latest
       - run: npm install
@@ -32,10 +38,9 @@ jobs:
       - run: npm test
 
       - name: Publish
-        run: | 
+        run: |
           if [[ "${{ github.ref }}" == refs/tags/*-beta.* ]] || [[ "${{ github.ref }}" == refs/tags/*-rc.* ]]; then
             npm publish --provenance --access public --tag beta
           else
             npm publish --provenance --access public
           fi
-          
