@@ -9,6 +9,8 @@ export interface MayaraClientOptions {
   debug?: (msg: string) => void
 }
 
+const API_BASE = '/signalk/v2/api/vessels/self/radars'
+
 export class MayaraClient {
   private host: string
   private port: number
@@ -70,60 +72,27 @@ export class MayaraClient {
   }
 
   async getRadars(): Promise<Record<string, unknown>> {
-    const data = (await this.request('GET', '/signalk/v2/api/vessels/self/radars')) as Record<
-      string,
-      unknown
-    >
-    if (data.radars && typeof data.radars === 'object') {
-      return data.radars as Record<string, unknown>
-    }
-    return data
-  }
-
-  private unwrapRadar(data: unknown, radarId: string, field: string): unknown {
-    const obj = data as Record<string, unknown>
-    const radars = obj.radars as Record<string, Record<string, unknown>> | undefined
-    if (radars?.[radarId]?.[field]) {
-      return radars[radarId][field]
-    }
-    return data
+    return (await this.request('GET', API_BASE)) as Record<string, unknown>
   }
 
   async getCapabilities(radarId: string): Promise<unknown> {
-    const data = await this.request(
-      'GET',
-      `/signalk/v2/api/vessels/self/radars/${radarId}/capabilities`
-    )
-    return this.unwrapRadar(data, radarId, 'capabilities')
+    return this.request('GET', `${API_BASE}/${radarId}/capabilities`)
   }
 
-  async getState(radarId: string): Promise<Record<string, unknown> | null> {
-    const data = await this.request(
-      'GET',
-      `/signalk/v2/api/vessels/self/radars/${radarId}/controls`
-    )
-    const controls = this.unwrapRadar(data, radarId, 'controls') as Record<string, unknown>
-    const power = controls.power as Record<string, unknown> | undefined
-    return {
-      status: power?.value === 2 ? 'transmit' : power?.value === 1 ? 'standby' : 'off',
-      controls
-    }
+  async getControls(radarId: string): Promise<Record<string, unknown>> {
+    return (await this.request('GET', `${API_BASE}/${radarId}/controls`)) as Record<string, unknown>
   }
 
   async setControl(radarId: string, controlId: string, value: unknown): Promise<unknown> {
-    return this.request(
-      'PUT',
-      `/signalk/v2/api/vessels/self/radars/${radarId}/controls/${controlId}`,
-      { value }
-    )
+    return this.request('PUT', `${API_BASE}/${radarId}/controls/${controlId}`, { value })
   }
 
   async setControls(radarId: string, controls: Record<string, unknown>): Promise<unknown> {
-    return this.request('PUT', `/signalk/v2/api/vessels/self/radars/${radarId}/controls`, controls)
+    return this.request('PUT', `${API_BASE}/${radarId}/controls`, controls)
   }
 
   async getTargets(radarId: string): Promise<unknown> {
-    return this.request('GET', `/signalk/v2/api/vessels/self/radars/${radarId}/targets`)
+    return this.request('GET', `${API_BASE}/${radarId}/targets`)
   }
 
   async acquireTarget(
@@ -131,27 +100,24 @@ export class MayaraClient {
     bearing: number,
     distance: number
   ): Promise<Record<string, unknown>> {
-    return (await this.request('POST', `/signalk/v2/api/vessels/self/radars/${radarId}/targets`, {
+    return (await this.request('POST', `${API_BASE}/${radarId}/targets/acquire`, {
       bearing,
       distance
     })) as Record<string, unknown>
   }
 
   async cancelTarget(radarId: string, targetId: number): Promise<unknown> {
-    return this.request(
-      'DELETE',
-      `/signalk/v2/api/vessels/self/radars/${radarId}/targets/${targetId}`
-    )
+    return this.request('DELETE', `${API_BASE}/${radarId}/targets/${targetId}`)
   }
 
   getSpokeStreamUrl(radarId: string): string {
     const wsProtocol = this.secure ? 'wss' : 'ws'
-    return `${wsProtocol}://${this.host}:${this.port}/signalk/v2/api/vessels/self/radars/${radarId}/spokes`
+    return `${wsProtocol}://${this.host}:${this.port}${API_BASE}/${radarId}/spokes`
   }
 
   getTargetStreamUrl(radarId: string): string {
     const wsProtocol = this.secure ? 'wss' : 'ws'
-    return `${wsProtocol}://${this.host}:${this.port}/signalk/v2/api/vessels/self/radars/${radarId}/targets/stream`
+    return `${wsProtocol}://${this.host}:${this.port}${API_BASE}/${radarId}/targets/stream`
   }
 
   close(): void {

@@ -16,24 +16,24 @@ function createRadarProvider(client, app) {
         },
         async getRadarInfo(radarId) {
             try {
-                const state = await client.getState(radarId);
-                if (!state)
-                    return null;
                 const radars = await client.getRadars();
                 const radarEntry = radars[radarId];
+                if (!radarEntry)
+                    return null;
+                const controls = await client.getControls(radarId);
                 const capabilities = (await client.getCapabilities(radarId));
-                const controls = (state.controls ?? {});
+                const powerCtrl = controls.power;
                 const rangeCtrl = controls.range;
-                const make = typeof radarEntry?.brand === 'string' ? radarEntry.brand : '';
-                const model = typeof radarEntry?.model === 'string' ? radarEntry.model : '';
-                const name = typeof radarEntry?.name === 'string' ? radarEntry.name : radarId;
+                const status = powerCtrl?.value === 2 ? 'transmit' : powerCtrl?.value === 1 ? 'standby' : 'off';
                 return {
                     id: radarId,
-                    name: name || (model ? `${make} ${model}`.trim() : radarId),
-                    brand: make || 'Unknown',
-                    status: (typeof state.status === 'string'
-                        ? state.status
-                        : 'standby'),
+                    name: typeof radarEntry.name === 'string'
+                        ? radarEntry.name
+                        : typeof radarEntry.model === 'string'
+                            ? `${typeof radarEntry.brand === 'string' ? radarEntry.brand : ''} ${radarEntry.model}`.trim()
+                            : radarId,
+                    brand: typeof radarEntry.brand === 'string' ? radarEntry.brand : 'Unknown',
+                    status: status,
                     spokesPerRevolution: Number(capabilities.spokesPerRevolution || 2048),
                     maxSpokeLen: Number(capabilities.maxSpokeLength || 512),
                     range: Number(rangeCtrl?.value ?? 1852),
@@ -61,7 +61,15 @@ function createRadarProvider(client, app) {
         },
         async getState(radarId) {
             try {
-                return (await client.getState(radarId));
+                const controls = await client.getControls(radarId);
+                const powerCtrl = controls.power;
+                const status = powerCtrl?.value === 2 ? 'transmit' : powerCtrl?.value === 1 ? 'standby' : 'off';
+                return {
+                    id: radarId,
+                    timestamp: new Date().toISOString(),
+                    status: status,
+                    controls: controls
+                };
             }
             catch (err) {
                 debug(`getState error for ${radarId}: ${err instanceof Error ? err.message : String(err)}`);
@@ -70,9 +78,8 @@ function createRadarProvider(client, app) {
         },
         async getControl(radarId, controlId) {
             try {
-                const state = await client.getState(radarId);
-                const controls = state?.controls;
-                return controls?.[controlId] ?? null;
+                const controls = await client.getControls(radarId);
+                return controls[controlId] ?? null;
             }
             catch (err) {
                 debug(`getControl error for ${radarId}/${controlId}: ${err instanceof Error ? err.message : String(err)}`);

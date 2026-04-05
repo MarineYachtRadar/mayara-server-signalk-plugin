@@ -16,15 +16,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Checkout mayara-server GUI
-        uses: actions/checkout@v4
-        with:
-          repository: MarineYachtRadar/mayara-server
-          path: mayara-server
-          sparse-checkout: web/gui
-
       - name: Clean workspace
-        run: git clean -xfd -e mayara-server
+        run: git clean -xfd
 
       - uses: actions/setup-node@v4
         with:

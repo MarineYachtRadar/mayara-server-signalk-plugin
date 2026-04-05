@@ -10,8 +10,9 @@ function createTestServer(
 ): Promise<number> {
   return new Promise((resolve) => {
     server = http.createServer(handler)
-    server.listen(0, () => {
-      resolve((server.address() as { port: number }).port)
+    const s = server
+    s.listen(0, () => {
+      resolve((s.address() as { port: number }).port)
     })
   })
 }
@@ -26,12 +27,12 @@ describe('MayaraClient', () => {
       expect(req.method).toBe('GET')
       expect(req.url).toBe('/signalk/v2/api/vessels/self/radars')
       res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ radars: { 'radar-0': { id: 'radar-0' } } }))
+      res.end(JSON.stringify({ 'radar-0': { name: 'Test', brand: 'Furuno' } }))
     })
 
     const client = new MayaraClient({ host: 'localhost', port: serverPort })
     const result = await client.getRadars()
-    expect(result).toEqual({ 'radar-0': { id: 'radar-0' } })
+    expect(result).toEqual({ 'radar-0': { name: 'Test', brand: 'Furuno' } })
   })
 
   it('makes PUT requests with body', async () => {
@@ -80,10 +81,16 @@ describe('MayaraClient', () => {
     )
   })
 
-  it('constructs target stream URL correctly', () => {
-    const client = new MayaraClient({ host: 'localhost', port: 6502 })
-    expect(client.getTargetStreamUrl('radar-0')).toBe(
-      'ws://localhost:6502/signalk/v2/api/vessels/self/radars/radar-0/targets/stream'
-    )
+  it('uses /targets/acquire for target acquisition', async () => {
+    serverPort = await createTestServer((req, res) => {
+      expect(req.method).toBe('POST')
+      expect(req.url).toBe('/signalk/v2/api/vessels/self/radars/radar-0/targets/acquire')
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ targetId: 1, radarId: 'radar-0' }))
+    })
+
+    const client = new MayaraClient({ host: 'localhost', port: serverPort })
+    const result = await client.acquireTarget('radar-0', 0.785, 1852)
+    expect(result).toEqual({ targetId: 1, radarId: 'radar-0' })
   })
 })

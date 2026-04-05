@@ -21,27 +21,28 @@ export function createRadarProvider(
 
     async getRadarInfo(radarId: string): Promise<radar.RadarInfo | null> {
       try {
-        const state = await client.getState(radarId)
-        if (!state) return null
-
         const radars = await client.getRadars()
         const radarEntry = radars[radarId] as Record<string, unknown> | undefined
+        if (!radarEntry) return null
 
+        const controls = await client.getControls(radarId)
         const capabilities = (await client.getCapabilities(radarId)) as Record<string, unknown>
 
-        const controls = (state.controls ?? {}) as Record<string, unknown>
+        const powerCtrl = controls.power as Record<string, unknown> | undefined
         const rangeCtrl = controls.range as Record<string, unknown> | undefined
-        const make = typeof radarEntry?.brand === 'string' ? radarEntry.brand : ''
-        const model = typeof radarEntry?.model === 'string' ? radarEntry.model : ''
-        const name = typeof radarEntry?.name === 'string' ? radarEntry.name : radarId
+        const status =
+          powerCtrl?.value === 2 ? 'transmit' : powerCtrl?.value === 1 ? 'standby' : 'off'
 
         return {
           id: radarId,
-          name: name || (model ? `${make} ${model}`.trim() : radarId),
-          brand: make || 'Unknown',
-          status: (typeof state.status === 'string'
-            ? state.status
-            : 'standby') as radar.RadarStatus,
+          name:
+            typeof radarEntry.name === 'string'
+              ? radarEntry.name
+              : typeof radarEntry.model === 'string'
+                ? `${typeof radarEntry.brand === 'string' ? radarEntry.brand : ''} ${radarEntry.model}`.trim()
+                : radarId,
+          brand: typeof radarEntry.brand === 'string' ? radarEntry.brand : 'Unknown',
+          status: status as radar.RadarStatus,
           spokesPerRevolution: Number(capabilities.spokesPerRevolution || 2048),
           maxSpokeLen: Number(capabilities.maxSpokeLength || 512),
           range: Number(rangeCtrl?.value ?? 1852),
@@ -73,7 +74,17 @@ export function createRadarProvider(
 
     async getState(radarId: string): Promise<radar.RadarState | null> {
       try {
-        return (await client.getState(radarId)) as radar.RadarState | null
+        const controls = await client.getControls(radarId)
+        const powerCtrl = controls.power as Record<string, unknown> | undefined
+        const status =
+          powerCtrl?.value === 2 ? 'transmit' : powerCtrl?.value === 1 ? 'standby' : 'off'
+
+        return {
+          id: radarId,
+          timestamp: new Date().toISOString(),
+          status: status as radar.RadarStatus,
+          controls: controls
+        }
       } catch (err) {
         debug(`getState error for ${radarId}: ${err instanceof Error ? err.message : String(err)}`)
         return null
@@ -82,9 +93,8 @@ export function createRadarProvider(
 
     async getControl(radarId: string, controlId: string): Promise<unknown> {
       try {
-        const state = await client.getState(radarId)
-        const controls = state?.controls as Record<string, unknown> | undefined
-        return controls?.[controlId] ?? null
+        const controls = await client.getControls(radarId)
+        return controls[controlId] ?? null
       } catch (err) {
         debug(
           `getControl error for ${radarId}/${controlId}: ${err instanceof Error ? err.message : String(err)}`

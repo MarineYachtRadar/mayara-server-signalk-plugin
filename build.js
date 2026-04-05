@@ -2,128 +2,76 @@
 /**
  * Build script for mayara-server-signalk-plugin
  *
- * Copies GUI files from mayara-server/web/gui/ to public/
- *
- * Usage: node build.js [--gui-path <path>] [--pack]
- *   --gui-path   Path to mayara-server/web/gui/ (default: auto-detect)
- *   --pack       Create a .tgz tarball with public/ included
+ * Creates public/ with a redirect page to mayara-server's GUI.
+ * The actual radar GUI runs on mayara-server itself.
+ * Webpack adds remoteEntry.js for the config panel.
  */
 
 const fs = require('fs')
 const path = require('path')
-const { execSync } = require('child_process')
-
-const args = process.argv.slice(2)
-const createPack = args.includes('--pack')
-
-const guiPathIdx = args.indexOf('--gui-path')
-function findGuiSource() {
-  if (guiPathIdx !== -1) {
-    const val = args[guiPathIdx + 1]
-    if (!val || val.startsWith('--')) {
-      console.error('Error: --gui-path requires a path argument')
-      process.exit(1)
-    }
-    return path.resolve(val)
-  }
-  const candidates = [
-    path.resolve(__dirname, '..', 'mayara-server', 'web', 'gui'),
-    path.resolve(__dirname, 'mayara-server', 'web', 'gui')
-  ]
-  for (const c of candidates) {
-    if (fs.existsSync(c)) return c
-  }
-  return candidates[0]
-}
-const guiSource = findGuiSource()
 
 const publicDest = path.join(__dirname, 'public')
 
-const COPY_EXTENSIONS = ['.html', '.js', '.css', '.ico', '.svg']
-const COPY_DIRS = ['assets', 'proto', 'protobuf', 'audio']
-const EXCLUDE_FILES = ['recordings.html', 'recordings.js', 'recordings.css']
-
-function copyDir(src, dest) {
-  if (!fs.existsSync(src)) {
-    console.error(`Source directory not found: ${src}`)
-    process.exit(1)
-  }
-  fs.mkdirSync(dest, { recursive: true })
-  const entries = fs.readdirSync(src, { withFileTypes: true })
-  for (const entry of entries) {
-    const srcPath = path.join(src, entry.name)
-    const destPath = path.join(dest, entry.name)
-    if (entry.isDirectory()) {
-      copyDir(srcPath, destPath)
-    } else {
-      fs.copyFileSync(srcPath, destPath)
-    }
-  }
-}
-
-function copyGui() {
-  if (!fs.existsSync(guiSource)) {
-    console.error(`GUI source not found: ${guiSource}`)
-    console.error('Use --gui-path to specify the path to mayara-server/web/gui/')
-    process.exit(1)
-  }
-
-  console.log(`Copying GUI from ${guiSource}...\n`)
+function main() {
+  console.log('=== MaYaRa SignalK Plugin Build ===\n')
 
   if (fs.existsSync(publicDest)) {
     fs.rmSync(publicDest, { recursive: true })
   }
   fs.mkdirSync(publicDest, { recursive: true })
+  fs.mkdirSync(path.join(publicDest, 'assets'), { recursive: true })
 
-  const entries = fs.readdirSync(guiSource, { withFileTypes: true })
-  for (const entry of entries) {
-    if (EXCLUDE_FILES.includes(entry.name)) continue
-
-    const srcPath = path.join(guiSource, entry.name)
-    const destPath = path.join(publicDest, entry.name)
-
-    if (entry.isDirectory()) {
-      if (COPY_DIRS.includes(entry.name)) {
-        copyDir(srcPath, destPath)
-      }
-    } else if (COPY_EXTENSIONS.some((ext) => entry.name.endsWith(ext))) {
-      fs.copyFileSync(srcPath, destPath)
-    }
+  // Copy logo for webapp icon
+  const logoSrc = path.resolve(__dirname, '..', 'mayara-server', 'web', 'gui', 'assets', 'mayara_logo.png')
+  const logoFallback = path.resolve(__dirname, 'mayara-server', 'web', 'gui', 'assets', 'mayara_logo.png')
+  const logoDest = path.join(publicDest, 'assets', 'mayara_logo.png')
+  if (fs.existsSync(logoSrc)) {
+    fs.copyFileSync(logoSrc, logoDest)
+  } else if (fs.existsSync(logoFallback)) {
+    fs.copyFileSync(logoFallback, logoDest)
   }
 
-  const fileCount = fs.readdirSync(publicDest, { recursive: true }).length
-  console.log(`Copied ${fileCount} GUI files to public/\n`)
-}
+  // Create redirect page
+  fs.writeFileSync(
+    path.join(publicDest, 'index.html'),
+    `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>MaYaRa Radar</title>
+  <script>
+    fetch('/plugins/mayara-server-signalk-plugin/api/gui-url')
+      .then(r => r.json())
+      .then(data => {
+        // Replace localhost/127.0.0.1 with browser's hostname (for managed containers)
+        const url = new URL(data.url);
+        if (url.hostname === 'localhost' || url.hostname === '127.0.0.1') {
+          url.hostname = window.location.hostname;
+        }
+        window.location.href = url.href;
+      })
+      .catch(() => {
+        document.getElementById('msg').textContent = 'mayara-server not reachable. Check plugin configuration.';
+      });
+  </script>
+  <style>
+    body { font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #111; color: #ccc; }
+    .box { text-align: center; }
+    .box img { width: 80px; margin-bottom: 16px; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <img src="assets/mayara_logo.png" alt="MaYaRa">
+    <p id="msg">Redirecting to mayara-server...</p>
+  </div>
+</body>
+</html>
+`
+  )
 
-function main() {
-  console.log('=== MaYaRa SignalK Plugin Build ===\n')
-  copyGui()
-
-  if (createPack) {
-    console.log('Creating tarball with public/ included...\n')
-    const npmignorePath = path.join(__dirname, '.npmignore')
-    const npmignoreContent = fs.readFileSync(npmignorePath, 'utf8')
-    const npmignoreWithoutPublic = npmignoreContent.replace(/^\/public\/\n?/m, '')
-    fs.writeFileSync(npmignorePath, npmignoreWithoutPublic)
-
-    const pkgPath = path.join(__dirname, 'package.json')
-    const pkgContent = fs.readFileSync(pkgPath, 'utf8')
-    const pkg = JSON.parse(pkgContent)
-    const originalFiles = [...pkg.files]
-    pkg.files.push('public/**/*')
-    fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n')
-
-    try {
-      execSync('npm pack', { stdio: 'inherit', cwd: __dirname })
-      console.log('\nTarball created successfully!')
-    } finally {
-      fs.writeFileSync(npmignorePath, npmignoreContent)
-      pkg.files = originalFiles
-      fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n')
-    }
-  }
-
-  console.log('\n=== Build complete ===')
+  console.log('Created redirect page in public/\n')
+  console.log('=== Build complete ===')
 }
 
 main()
