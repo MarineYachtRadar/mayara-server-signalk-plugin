@@ -26,7 +26,6 @@ module.exports = function (app: MayaraServerAPI): Plugin {
     id: 'mayara-server-signalk-plugin',
     name: 'MaYaRa Radar (Server)',
     description: 'Connect SignalK to mayara-server for multi-brand marine radar integration',
-    enabledByDefault: true,
 
     schema: ConfigSchema,
 
