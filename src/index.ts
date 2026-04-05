@@ -271,6 +271,19 @@ module.exports = function (app: MayaraServerAPI): Plugin {
       return
     }
 
+    if (settings.managedContainer) {
+      app.setPluginStatus('Waiting for mayara-server to become ready...')
+      const deadline = Date.now() + 30000
+      while (Date.now() < deadline) {
+        try {
+          await client.getRadars()
+          break
+        } catch {
+          await new Promise<void>((resolve) => setTimeout(resolve, 1000))
+        }
+      }
+    }
+
     await connectAndDiscover(settings)
   }
 

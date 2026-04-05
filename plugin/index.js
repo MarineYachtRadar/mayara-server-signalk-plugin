@@ -21,7 +21,6 @@ module.exports = function (app) {
         id: 'mayara-server-signalk-plugin',
         name: 'MaYaRa Radar (Server)',
         description: 'Connect SignalK to mayara-server for multi-brand marine radar integration',
-        enabledByDefault: true,
         schema: schema_1.ConfigSchema,
         start(config) {
             app.debug('Starting mayara-server-signalk-plugin');
@@ -232,6 +231,19 @@ module.exports = function (app) {
         catch (err) {
             app.setPluginError(`Failed to register radar provider: ${err instanceof Error ? err.message : String(err)}`);
             return;
+        }
+        if (settings.managedContainer) {
+            app.setPluginStatus('Waiting for mayara-server to become ready...');
+            const deadline = Date.now() + 30000;
+            while (Date.now() < deadline) {
+                try {
+                    await client.getRadars();
+                    break;
+                }
+                catch {
+                    await new Promise((resolve) => setTimeout(resolve, 1000));
+                }
+            }
         }
         await connectAndDiscover(settings);
     }
