@@ -2,233 +2,76 @@
 /**
  * Build script for mayara-server-signalk-plugin
  *
- * Downloads @marineyachtradar/mayara-gui from npm and copies GUI files to public/
- *
- * Usage: node build.js [options]
- *   --local-gui  Use local mayara-gui instead of npm (for development)
- *   --pack       Create a .tgz tarball with public/ included (for manual install)
+ * Creates public/ with a redirect page to mayara-server's GUI.
+ * The actual radar GUI runs on mayara-server itself.
+ * Webpack adds remoteEntry.js for the config panel.
  */
 
 const fs = require('fs')
 const path = require('path')
-const { execSync } = require('child_process')
 
-const args = process.argv.slice(2)
-const useLocalGui = args.includes('--local-gui')
-const createPack = args.includes('--pack')
-
-// Paths (relative to this script's directory)
-const scriptDir = __dirname
-const publicDest = path.join(scriptDir, 'public')
-
-/**
- * Recursively copy directory contents
- */
-function copyDir(src, dest) {
-  if (!fs.existsSync(src)) {
-    console.error(`Source directory not found: ${src}`)
-    process.exit(1)
-  }
-
-  // Remove destination if it exists
-  if (fs.existsSync(dest)) {
-    fs.rmSync(dest, { recursive: true })
-  }
-
-  // Create destination directory
-  fs.mkdirSync(dest, { recursive: true })
-
-  // Copy all files and subdirectories
-  const entries = fs.readdirSync(src, { withFileTypes: true })
-  for (const entry of entries) {
-    const srcPath = path.join(src, entry.name)
-    const destPath = path.join(dest, entry.name)
-    if (entry.isDirectory()) {
-      copyDir(srcPath, destPath)
-    } else {
-      fs.copyFileSync(srcPath, destPath)
-    }
-  }
-}
-
-/**
- * Find mayara-gui in node_modules (handles npm hoisting)
- */
-function findGuiPackage() {
-  // Possible locations for mayara-gui:
-  // 1. Nested in plugin's own node_modules (npm nested install)
-  // 2. Hoisted to parent node_modules (SignalK App Store installs to ~/.signalk/node_modules/)
-  //    Structure: ~/.signalk/node_modules/@marineyachtradar/signalk-plugin/
-  //               ~/.signalk/node_modules/@marineyachtradar/mayara-gui/
-  // 3. Local development (sibling directory)
-  const candidates = [
-    // Nested: <plugin>/node_modules/@marineyachtradar/mayara-gui
-    path.join(scriptDir, 'node_modules', '@marineyachtradar', 'mayara-gui'),
-    // Hoisted (scoped): <node_modules>/@marineyachtradar/<plugin> -> <node_modules>/@marineyachtradar/mayara-gui
-    path.join(scriptDir, '..', 'mayara-gui'),
-    // Hoisted (top-level): <node_modules>/@marineyachtradar/<plugin> -> <node_modules>/@marineyachtradar/mayara-gui
-    path.join(scriptDir, '..', '..', '@marineyachtradar', 'mayara-gui'),
-  ]
-
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      return candidate
-    }
-  }
-  return null
-}
-
-/**
- * Download GUI from npm and copy to public/
- */
-function setupGuiFromNpm() {
-  console.log('Copying GUI from node_modules...\n')
-
-  // Find mayara-gui (handles npm hoisting where deps may be in parent node_modules)
-  const guiSource = findGuiPackage()
-
-  if (!guiSource) {
-    console.error('Error: @marineyachtradar/mayara-gui not found')
-    console.error('Searched locations:')
-    console.error('  - ' + path.join(scriptDir, 'node_modules', '@marineyachtradar', 'mayara-gui'))
-    console.error('  - ' + path.join(scriptDir, '..', 'mayara-gui'))
-    console.error('  - ' + path.join(scriptDir, '..', '..', '@marineyachtradar', 'mayara-gui'))
-    console.error('Make sure @marineyachtradar/mayara-gui is listed in package.json dependencies')
-    process.exit(1)
-  }
-
-  console.log('Found mayara-gui at: ' + guiSource)
-
-  // Remove old public dir
-  if (fs.existsSync(publicDest)) {
-    fs.rmSync(publicDest, { recursive: true })
-  }
-  fs.mkdirSync(publicDest, { recursive: true })
-
-  // Copy GUI files (exclude package.json, node_modules, etc.)
-  const guiPatterns = [
-    { ext: '.html' },
-    { ext: '.js' },
-    { ext: '.css' },
-    { ext: '.ico' },
-    { ext: '.svg' },
-    { dir: 'assets' },
-    { dir: 'proto' },
-    { dir: 'protobuf' }
-  ]
-
-  const entries = fs.readdirSync(guiSource, { withFileTypes: true })
-  for (const entry of entries) {
-    const srcPath = path.join(guiSource, entry.name)
-    const destPath = path.join(publicDest, entry.name)
-
-    if (entry.isDirectory()) {
-      // Copy known directories
-      if (guiPatterns.some(p => p.dir === entry.name)) {
-        copyDir(srcPath, destPath)
-      }
-    } else {
-      // Copy files matching extensions
-      if (guiPatterns.some(p => p.ext && entry.name.endsWith(p.ext))) {
-        fs.copyFileSync(srcPath, destPath)
-      }
-    }
-  }
-
-  const fileCount = fs.readdirSync(publicDest, { recursive: true }).length
-  console.log(`Copied ${fileCount} GUI files to public/\n`)
-}
-
-/**
- * Copy GUI from local sibling directory (for development)
- */
-function setupGuiFromLocal() {
-  const localGuiPath = path.join(scriptDir, '..', 'mayara-gui')
-  console.log(`Copying GUI from local ${localGuiPath}...\n`)
-
-  // Remove old public dir
-  if (fs.existsSync(publicDest)) {
-    fs.rmSync(publicDest, { recursive: true })
-  }
-  fs.mkdirSync(publicDest, { recursive: true })
-
-  // Copy GUI files (exclude package.json, node_modules, .git, etc.)
-  const guiPatterns = [
-    { ext: '.html' },
-    { ext: '.js' },
-    { ext: '.css' },
-    { ext: '.ico' },
-    { ext: '.svg' },
-    { dir: 'assets' },
-    { dir: 'proto' },
-    { dir: 'protobuf' }
-  ]
-
-  const entries = fs.readdirSync(localGuiPath, { withFileTypes: true })
-  for (const entry of entries) {
-    const srcPath = path.join(localGuiPath, entry.name)
-    const destPath = path.join(publicDest, entry.name)
-
-    if (entry.isDirectory()) {
-      // Copy known directories
-      if (guiPatterns.some(p => p.dir === entry.name)) {
-        copyDir(srcPath, destPath)
-      }
-    } else {
-      // Copy files matching extensions
-      if (guiPatterns.some(p => p.ext && entry.name.endsWith(p.ext))) {
-        fs.copyFileSync(srcPath, destPath)
-      }
-    }
-  }
-
-  const fileCount = fs.readdirSync(publicDest, { recursive: true }).length
-  console.log(`Copied ${fileCount} files from local mayara-gui/ to public/\n`)
-}
+const publicDest = path.join(__dirname, 'public')
 
 function main() {
   console.log('=== MaYaRa SignalK Plugin Build ===\n')
 
-  // Get GUI assets
-  console.log('Setting up GUI assets...\n')
-  if (useLocalGui) {
-    setupGuiFromLocal()
-  } else {
-    setupGuiFromNpm()
+  if (fs.existsSync(publicDest)) {
+    fs.rmSync(publicDest, { recursive: true })
+  }
+  fs.mkdirSync(publicDest, { recursive: true })
+  fs.mkdirSync(path.join(publicDest, 'assets'), { recursive: true })
+
+  // Copy logo for webapp icon
+  const logoSrc = path.resolve(__dirname, '..', 'mayara-server', 'web', 'gui', 'assets', 'mayara_logo.png')
+  const logoFallback = path.resolve(__dirname, 'mayara-server', 'web', 'gui', 'assets', 'mayara_logo.png')
+  const logoDest = path.join(publicDest, 'assets', 'mayara_logo.png')
+  if (fs.existsSync(logoSrc)) {
+    fs.copyFileSync(logoSrc, logoDest)
+  } else if (fs.existsSync(logoFallback)) {
+    fs.copyFileSync(logoFallback, logoDest)
   }
 
-  // Create tarball if --pack flag is set
-  if (createPack) {
-    console.log('Creating tarball with public/ included...\n')
+  // Create redirect page
+  fs.writeFileSync(
+    path.join(publicDest, 'index.html'),
+    `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>MaYaRa Radar</title>
+  <script>
+    fetch('/plugins/mayara-server-signalk-plugin/api/gui-url')
+      .then(r => r.json())
+      .then(data => {
+        // Replace localhost/127.0.0.1 with browser's hostname (for managed containers)
+        const url = new URL(data.url);
+        if (url.hostname === 'localhost' || url.hostname === '127.0.0.1') {
+          url.hostname = window.location.hostname;
+        }
+        window.location.href = url.href;
+      })
+      .catch(() => {
+        document.getElementById('msg').textContent = 'mayara-server not reachable. Check plugin configuration.';
+      });
+  </script>
+  <style>
+    body { font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #111; color: #ccc; }
+    .box { text-align: center; }
+    .box img { width: 80px; margin-bottom: 16px; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <img src="assets/mayara_logo.png" alt="MaYaRa">
+    <p id="msg">Redirecting to mayara-server...</p>
+  </div>
+</body>
+</html>
+`
+  )
 
-    // Temporarily remove public/ from .npmignore
-    const npmignorePath = path.join(scriptDir, '.npmignore')
-    const npmignoreContent = fs.readFileSync(npmignorePath, 'utf8')
-    const npmignoreWithoutPublic = npmignoreContent.replace(/^public\/\n?/m, '')
-    fs.writeFileSync(npmignorePath, npmignoreWithoutPublic)
-
-    // Also temporarily add public/ to files in package.json
-    const pkgPath = path.join(scriptDir, 'package.json')
-    const pkgContent = fs.readFileSync(pkgPath, 'utf8')
-    const pkg = JSON.parse(pkgContent)
-    const originalFiles = [...pkg.files]
-    pkg.files.push('public/**/*')
-    fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n')
-
-    try {
-      // Run npm pack
-      execSync('npm pack', { stdio: 'inherit', cwd: scriptDir })
-      console.log('\nTarball created successfully!')
-    } finally {
-      // Restore .npmignore
-      fs.writeFileSync(npmignorePath, npmignoreContent)
-      // Restore package.json
-      pkg.files = originalFiles
-      fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n')
-    }
-  }
-
-  console.log('\n=== Build complete ===')
+  console.log('Created redirect page in public/\n')
+  console.log('=== Build complete ===')
 }
 
 main()

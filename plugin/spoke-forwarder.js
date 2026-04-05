@@ -1,143 +1,111 @@
-/**
- * SpokeForwarder - WebSocket client that forwards spoke data to SignalK's binaryStreamManager
- *
- * Connects to mayara-server's spoke WebSocket endpoint and forwards binary data
- * to SignalK's built-in binary stream infrastructure.
- *
- * SignalK clients connect to /signalk/v2/api/vessels/self/radars/{id}/stream
- * and receive the forwarded data automatically.
- */
-
-const WebSocket = require('ws')
-
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.SpokeForwarder = void 0;
+const ws_1 = __importDefault(require("ws"));
 class SpokeForwarder {
-  /**
-   * Create a SpokeForwarder
-   * @param {object} options - Configuration options
-   * @param {string} options.radarId - The radar ID
-   * @param {string} options.url - WebSocket URL for mayara-server spoke stream
-   * @param {object} options.binaryStreamManager - SignalK's binaryStreamManager
-   * @param {function} options.debug - Debug logging function
-   * @param {number} options.reconnectInterval - Reconnect interval in ms (default: 5000)
-   */
-  constructor({ radarId, url, binaryStreamManager, debug, reconnectInterval = 5000 }) {
-    this.radarId = radarId
-    this.url = url
-    this.binaryStreamManager = binaryStreamManager
-    this.debug = debug || (() => {})
-    this.reconnectInterval = reconnectInterval
-
-    this.ws = null
-    this.reconnectTimer = null
-    this.closed = false
-    this.connected = false
-
-    // Stream ID for binaryStreamManager (matches SignalK radar stream pattern)
-    this.streamId = `radars/${radarId}`
-  }
-
-  /**
-   * Start the forwarder - connect to mayara-server
-   */
-  start() {
-    if (this.closed) return
-    this.connect()
-  }
-
-  /**
-   * Connect to mayara-server spoke WebSocket
-   */
-  connect() {
-    if (this.closed) return
-
-    this.debug(`Connecting to spoke stream: ${this.url}`)
-
-    try {
-      this.ws = new WebSocket(this.url)
-      this.ws.binaryType = 'arraybuffer'
-
-      this.ws.on('open', () => {
-        this.connected = true
-        this.debug(`Connected to spoke stream for ${this.radarId}`)
-      })
-
-      this.ws.on('message', (data) => {
-        // Forward binary spoke data to SignalK's binaryStreamManager
-        if (this.binaryStreamManager && data instanceof ArrayBuffer) {
-          const buffer = Buffer.from(data)
-          this.binaryStreamManager.emitData(this.streamId, buffer)
-        } else if (this.binaryStreamManager && Buffer.isBuffer(data)) {
-          this.binaryStreamManager.emitData(this.streamId, data)
+    radarId;
+    url;
+    binaryStreamManager;
+    debug;
+    reconnectMs;
+    ws = null;
+    reconnectTimer = null;
+    closed = false;
+    connected = false;
+    streamId;
+    constructor(options) {
+        this.radarId = options.radarId;
+        this.url = options.url;
+        this.binaryStreamManager = options.binaryStreamManager;
+        this.debug = options.debug ?? (() => { });
+        this.reconnectMs = options.reconnectInterval ?? 5000;
+        this.streamId = `radars/${options.radarId}`;
+    }
+    start() {
+        if (this.closed)
+            return;
+        this.connect();
+    }
+    connect() {
+        if (this.closed)
+            return;
+        this.debug(`Connecting to spoke stream: ${this.url}`);
+        try {
+            this.ws = new ws_1.default(this.url);
+            this.ws.on('open', () => {
+                this.connected = true;
+                this.debug(`Connected to spoke stream for ${this.radarId}`);
+            });
+            this.ws.on('message', (data) => {
+                let buf;
+                if (Buffer.isBuffer(data)) {
+                    buf = data;
+                }
+                else if (data instanceof ArrayBuffer) {
+                    buf = Buffer.from(data);
+                }
+                else if (Array.isArray(data)) {
+                    buf = Buffer.concat(data);
+                }
+                else {
+                    return;
+                }
+                if (buf.length > 0) {
+                    this.binaryStreamManager.emitData(this.streamId, buf);
+                }
+            });
+            this.ws.on('error', (err) => {
+                this.connected = false;
+                this.debug(`Spoke stream error for ${this.radarId}: ${err.message}`);
+            });
+            this.ws.on('close', (code) => {
+                this.connected = false;
+                this.debug(`Spoke stream closed for ${this.radarId}: ${code}`);
+                if (!this.closed) {
+                    this.scheduleReconnect();
+                }
+            });
         }
-      })
-
-      this.ws.on('error', (err) => {
-        this.debug(`Spoke stream error for ${this.radarId}: ${err.message}`)
-      })
-
-      this.ws.on('close', (code, reason) => {
-        this.connected = false
-        this.debug(`Spoke stream closed for ${this.radarId}: ${code} ${reason}`)
-
-        if (!this.closed) {
-          this.scheduleReconnect()
+        catch (err) {
+            this.debug(`Failed to connect to spoke stream for ${this.radarId}: ${err instanceof Error ? err.message : String(err)}`);
+            this.scheduleReconnect();
         }
-      })
-    } catch (err) {
-      this.debug(`Failed to connect to spoke stream for ${this.radarId}: ${err.message}`)
-      if (!this.closed) {
-        this.scheduleReconnect()
-      }
     }
-  }
-
-  /**
-   * Schedule a reconnection attempt
-   */
-  scheduleReconnect() {
-    if (this.closed || this.reconnectTimer) return
-
-    this.debug(`Scheduling reconnect for ${this.radarId} in ${this.reconnectInterval}ms`)
-
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = null
-      if (!this.closed) {
-        this.connect()
-      }
-    }, this.reconnectInterval)
-  }
-
-  /**
-   * Check if the forwarder is connected
-   * @returns {boolean}
-   */
-  isConnected() {
-    return this.connected
-  }
-
-  /**
-   * Stop the forwarder and close the WebSocket
-   */
-  stop() {
-    this.closed = true
-
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer)
-      this.reconnectTimer = null
+    scheduleReconnect() {
+        if (this.closed || this.reconnectTimer)
+            return;
+        this.debug(`Scheduling reconnect for ${this.radarId} in ${this.reconnectMs}ms`);
+        this.reconnectTimer = setTimeout(() => {
+            this.reconnectTimer = null;
+            if (!this.closed) {
+                this.connect();
+            }
+        }, this.reconnectMs);
     }
-
-    if (this.ws) {
-      try {
-        this.ws.close()
-      } catch (err) {
-        // Ignore close errors
-      }
-      this.ws = null
+    isConnected() {
+        return this.connected;
     }
-
-    this.connected = false
-    this.debug(`Stopped spoke forwarder for ${this.radarId}`)
-  }
+    stop() {
+        this.closed = true;
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+        if (this.ws) {
+            try {
+                this.ws.close();
+            }
+            catch {
+                // Ignore close errors
+            }
+            this.ws = null;
+        }
+        this.connected = false;
+        this.debug(`Stopped spoke forwarder for ${this.radarId}`);
+    }
 }
-
-module.exports = SpokeForwarder
+exports.SpokeForwarder = SpokeForwarder;
+//# sourceMappingURL=spoke-forwarder.js.map
