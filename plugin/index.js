@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 const child_process_1 = require("child_process");
+const fs_1 = require("fs");
 const util_1 = require("util");
 const execAsync = (0, util_1.promisify)(child_process_1.exec);
 const mayara_client_1 = require("./mayara-client");
@@ -71,11 +72,20 @@ module.exports = function (app) {
                     // ignore
                 }
                 try {
-                    const tag = currentSettings?.mayaraVersion ?? 'latest';
-                    containerImage = `${MAYARA_IMAGE}:${tag}`;
+                    const containers = globalThis.__signalk_containerManager;
+                    if (containers?.getRuntime()) {
+                        const list = await containers.listContainers();
+                        const mayara = list.find((c) => c.name === 'sk-mayara-server');
+                        if (mayara) {
+                            containerImage = mayara.image;
+                        }
+                    }
                 }
                 catch {
                     // ignore
+                }
+                if (!containerImage) {
+                    containerImage = `${MAYARA_IMAGE}:${currentSettings?.mayaraVersion ?? 'latest'}`;
                 }
                 res.json({
                     connected: isConnected,
@@ -268,20 +278,35 @@ module.exports = function (app) {
         app.debug('Container runtime ready, starting mayara-server');
         app.setPluginStatus('Starting mayara-server container...');
         const userArgs = settings.mayaraArgs ?? [];
-        // Auto-pass SignalK TCP address to avoid mDNS multicast conflict
-        // (mayara-server joins 224.0.0.251:5353 for discovery which clashes with SignalK's dnssd2)
         const tcpPort = Number(process.env.TCPSTREAMPORT) || 8375;
         const navArg = userArgs.some((a) => a === '-n' || a === '--navigation-address')
             ? []
             : ['-n', `tcp:127.0.0.1:${tcpPort}`];
         const command = ['mayara-server', ...navArg, ...userArgs];
+        const tag = settings.mayaraVersion ?? 'latest';
+        const configHash = JSON.stringify({ tag, command });
+        const hashFile = `${app.getDataDirPath()}.container-hash`;
+        let lastHash = '';
+        try {
+            lastHash = (0, fs_1.readFileSync)(hashFile, 'utf8');
+        }
+        catch {
+            // first run
+        }
+        const state = await containers.getState('mayara-server');
+        if (state !== 'missing' && configHash !== lastHash) {
+            app.setPluginStatus('Recreating mayara-server container (config changed)...');
+            await containers.remove('mayara-server');
+        }
+        app.setPluginStatus('Starting mayara-server container...');
         await containers.ensureRunning('mayara-server', {
             image: MAYARA_IMAGE,
-            tag: settings.mayaraVersion ?? 'latest',
+            tag,
             networkMode: 'host',
             command,
             restart: 'unless-stopped'
         });
+        (0, fs_1.writeFileSync)(hashFile, configHash);
         app.debug('mayara-server container ready');
     }
     async function connectAndDiscover(settings) {

@@ -207,6 +207,18 @@ export default function PluginConfigurationPanel({ configuration, save }) {
     return () => clearInterval(interval);
   }, [fetchVersions, fetchStatus]);
 
+  // Sync dropdown to actual running container tag (once on first status load)
+  const [versionSynced, setVersionSynced] = useState(false);
+  useEffect(() => {
+    if (!versionSynced && pluginStatus?.container?.image) {
+      const tag = pluginStatus.container.image.split(":")[1];
+      if (tag) {
+        setMayaraVersion(tag);
+        setVersionSynced(true);
+      }
+    }
+  }, [pluginStatus, versionSynced]);
+
   const doSave = () => {
     const args = mayaraArgs.trim() ? mayaraArgs.trim().split(/\s+/) : [];
     save({
@@ -259,7 +271,9 @@ export default function PluginConfigurationPanel({ configuration, save }) {
         body: JSON.stringify({ tag: mayaraVersion }),
       });
       if (res.ok) {
-        setActionStatus("Updated! Save config to restart with new version.");
+        const data = await res.json();
+        if (data.tag) setMayaraVersion(data.tag);
+        setActionStatus("Updated! Save config to apply.");
       } else {
         const data = await res.json();
         setActionStatus("Update failed: " + (data.error || res.statusText));

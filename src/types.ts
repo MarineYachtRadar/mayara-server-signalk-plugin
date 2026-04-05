@@ -16,4 +16,5 @@ export interface ContainerManagerApi {
   getState: (name: string) => Promise<'running' | 'stopped' | 'missing' | 'no-runtime'>
   pullImage: (image: string, onProgress?: (msg: string) => void) => Promise<void>
   imageExists: (image: string) => Promise<boolean>
+  listContainers: () => Promise<{ name: string; image: string; state: string }[]>
 }
