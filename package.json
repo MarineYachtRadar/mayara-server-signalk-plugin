@@ -36,6 +36,7 @@
   ],
   "signalk-plugin-enabled-by-default": true,
   "engines": {
+    "node": ">=20",
     "signalk": ">=2.0.0"
   },
   "dependencies": {
