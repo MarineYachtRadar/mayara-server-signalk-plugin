@@ -314,12 +314,20 @@ module.exports = function (app: MayaraServerAPI): Plugin {
     app.debug('Container runtime ready, starting mayara-server')
     app.setPluginStatus('Starting mayara-server container...')
 
-    const args = settings.mayaraArgs ?? []
+    const userArgs = settings.mayaraArgs ?? []
+    // Auto-pass SignalK TCP address to avoid mDNS multicast conflict
+    // (mayara-server joins 224.0.0.251:5353 for discovery which clashes with SignalK's dnssd2)
+    const tcpPort = Number(process.env.TCPSTREAMPORT) || 8375
+    const navArg = userArgs.some((a) => a === '-n' || a === '--navigation-address')
+      ? []
+      : ['-n', `tcp:127.0.0.1:${tcpPort}`]
+    const command = ['mayara-server', ...navArg, ...userArgs]
+
     await containers.ensureRunning('mayara-server', {
       image: MAYARA_IMAGE,
       tag: settings.mayaraVersion ?? 'latest',
       networkMode: 'host',
-      command: args.length > 0 ? ['mayara-server', ...args] : undefined,
+      command,
       restart: 'unless-stopped'
     })
     app.debug('mayara-server container ready')
