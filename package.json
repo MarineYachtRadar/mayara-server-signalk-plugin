@@ -1,6 +1,6 @@
 {
   "name": "@marineyachtradar/signalk-plugin",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "MaYaRa Radar - Connect SignalK to mayara-server",
   "main": "plugin/index.js",
   "scripts": {
@@ -36,14 +36,14 @@
   ],
   "engines": {
     "node": ">=20",
-    "signalk": ">=2.0.0"
+    "signalk": ">=2.24.0"
   },
   "dependencies": {
     "@sinclair/typebox": "^0.34.0",
     "ws": "^8.14.0"
   },
   "peerDependencies": {
-    "signalk-container": ">=0.1.0"
+    "signalk-container": ">=0.1.6"
   },
   "peerDependenciesMeta": {
     "signalk-container": {

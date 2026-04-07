@@ -4,8 +4,9 @@ A SignalK plugin that connects to [mayara-server](https://github.com/MarineYacht
 
 ## Prerequisites
 
-- **SignalK Server** with the Radar API — **PR [SignalK/signalk-server#2357](https://github.com/SignalK/signalk-server/pull/2357)**
-- **[signalk-container](https://github.com/dirkwa/signalk-container)** plugin (for managed container mode, optional)
+- **SignalK Server ≥ 2.24.0** with the Radar API — **PR [SignalK/signalk-server#2357](https://github.com/SignalK/signalk-server/pull/2357)**
+- **Node.js ≥ 20** (matches signalk-server 2.24.0 baseline; tested on Node 22 and 24, also works on Cerbo GX with Node 20)
+- **[signalk-container](https://github.com/dirkwa/signalk-container) ≥ 0.1.6** (for managed container mode, optional)
 - **Podman** or **Docker** runtime (for managed container mode)
 
 ## How It Works
@@ -59,11 +60,38 @@ The plugin provides a custom configuration panel in the SignalK Admin UI.
 With **signalk-container** installed, the plugin automatically pulls and manages the `ghcr.io/marineyachtradar/mayara-server` container image using host networking for radar multicast discovery.
 
 - **Image version** — select `latest`, `main`, or a specific release tag
-- **Check** — pulls the selected tag and compares against the running container
-- **Update** — pulls, stops, removes, and recreates the container with the new image
+- **Check** — queries signalk-container's centralized update detection service. Auto-detects whether the running tag is semver (compare via GitHub releases) or floating like `latest`/`main` (compare local digest to remote). Offline-tolerant: if the boat is at sea, returns the last cached result rather than failing.
+- **Update** — pulls the selected version, recreates the container, and reapplies the resource limits (see below).
 - **Arguments** (advanced) — optional CLI args like `--brand furuno --interface eth0`
 
 Without arguments, mayara-server auto-discovers all radar brands on all network interfaces.
+
+### Resource Limits
+
+The plugin sets sensible default resource caps so a runaway container can't take down Signal K:
+
+| Setting        | Default | Why                                                  |
+| -------------- | ------- | ---------------------------------------------------- |
+| `cpus`         | `1.5`   | Mayara processing peaks ≈ 1 core; 50% headroom        |
+| `memory`       | `512m`  | Hard memory cap, OOM-killed if exceeded              |
+| `memorySwap`   | `512m`  | = memory → swap disabled (recommended on Pi/eMMC)     |
+| `pidsLimit`    | `200`   | Bounds runaway thread leaks                          |
+
+Tested on a Pi 5 8GB with a Garmin xHD2 at 24 NM range. If your setup needs different limits (e.g. multiple radars, larger range, weaker hardware), override per-field via signalk-container's plugin config under **Per-container resource overrides**:
+
+```json
+{
+  "mayara-server": {
+    "cpus": 2.0,
+    "memory": "1g",
+    "memorySwap": "1g"
+  }
+}
+```
+
+The override is field-level merged on top of the plugin defaults — you don't have to know what the plugin set, just specify what you want different. Use `null` to remove a specific limit set by the plugin (e.g. `{"memory": null}` for unlimited memory).
+
+See [signalk-container's developer guide](https://github.com/dirkwa/signalk-container/blob/master/doc/plugin-developer-guide.md#resource-limits) for the full reference.
 
 ### External Mode
 
@@ -78,12 +106,13 @@ The webapp redirects to mayara-server's built-in GUI at `http://<host>:6502/gui/
 
 ## Features
 
-- **Container management**: Pull, update, and run mayara-server via signalk-container
+- **Container management**: Pull, update, and run mayara-server via signalk-container with sensible default resource limits
 - **Multi-radar support**: Auto-discovers all radars connected to mayara-server
 - **Full Radar API**: Power, range, gain, sea/rain clutter, ARPA targets
 - **Binary spoke streaming**: Forwards protobuf spoke data via SignalK's binaryStreamManager
 - **Auto-reconnection**: Handles disconnections with configurable retry
-- **Update detection**: Compare running container image against registry
+- **Centralized update detection**: Delegated to signalk-container's update service. Auto-detects semver vs floating tags, offline-tolerant with persistent cache, no direct shellouts.
+- **User-configurable resource limits**: Default caps on CPU, memory, and PIDs; per-field overrides via signalk-container's config.
 
 ## Development
 
