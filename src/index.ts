@@ -219,11 +219,31 @@ module.exports = function (app: MayaraServerAPI): Plugin {
             return
           }
 
-          // Persist the new tag so a plugin restart doesn't roll back.
-          // Note: signalk-container's centralized update service will pick
-          // up the new currentTag() value on the next scheduled check.
+          // Persist the new tag to disk so a plugin restart doesn't roll
+          // back to the previous version. We update the in-memory copy
+          // first (for immediate consistency with /api/update/check) and
+          // then call app.savePluginOptions() to write through to
+          // ${dataDir}/plugin-config-data/mayara-server-signalk-plugin.json.
+          // signalk-container's update service picks up the new
+          // currentTag() value on the next scheduled check.
           if (currentSettings) {
             currentSettings.mayaraVersion = tag
+            await new Promise<void>((resolve) => {
+              app.savePluginOptions({ ...currentSettings }, (err: NodeJS.ErrnoException | null) => {
+                if (err) {
+                  // Non-fatal: the container is up with the new tag.
+                  // Worst case, a plugin restart reverts to the old
+                  // tag from the config file and the user has to
+                  // click Update again. Log it and continue.
+                  app.error(
+                    `Failed to persist new tag to plugin config: ${errMsg(err)}. ` +
+                      `Container is running with mayara-server:${tag} but a plugin ` +
+                      `restart will revert to the previous configured tag.`
+                  )
+                }
+                resolve()
+              })
+            })
           }
 
           app.setPluginStatus(`Updated to mayara-server:${tag}`)

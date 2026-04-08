@@ -156,6 +156,7 @@ interface MockApp {
   setPluginStatus: ReturnType<typeof vi.fn>
   setPluginError: ReturnType<typeof vi.fn>
   getDataDirPath: () => string
+  savePluginOptions: ReturnType<typeof vi.fn>
   radarApi: { register: ReturnType<typeof vi.fn>; unRegister: ReturnType<typeof vi.fn> }
   binaryStreamManager: undefined
 }
@@ -167,6 +168,13 @@ function makeMockApp(): MockApp {
     setPluginStatus: vi.fn(),
     setPluginError: vi.fn(),
     getDataDirPath: () => '/tmp/mayara-test',
+    // SignalK persistence API: writes to plugin-config-data/<pluginId>.json
+    // The signature is (config, callback) where callback gets a NodeJS.ErrnoException | null.
+    savePluginOptions: vi.fn(
+      (_config: unknown, cb: (err: NodeJS.ErrnoException | null) => void) => {
+        cb(null)
+      }
+    ),
     radarApi: {
       register: vi.fn(),
       unRegister: vi.fn()
@@ -477,6 +485,46 @@ describe('mayara-server-signalk-plugin v0.1.5 container integration', () => {
       await handler({ body: {} }, res)
       expect(res.statusCode).toBe(200)
       expect(containers._calls.pullImage).toEqual(['ghcr.io/marineyachtradar/mayara-server:v3.2.0'])
+      await plugin.stop()
+    })
+
+    it('persists the new tag to disk via app.savePluginOptions', async () => {
+      // CodeRabbit PR #8 finding: previously the route updated only the
+      // in-memory currentSettings, so a SK restart before the user clicked
+      // "Save Configuration" reverted to the prior tag. Fix calls
+      // savePluginOptions() to write through to plugin-config-data.
+      const { router, app, plugin } = await loadPlugin({ mayaraVersion: 'v3.0.0' })
+      const handler = getHandler(router, 'POST /api/update/apply')
+      const res = makeRes()
+      await handler({ body: { tag: 'v3.4.0' } }, res)
+      expect(res.statusCode).toBe(200)
+      expect(app.savePluginOptions).toHaveBeenCalledTimes(1)
+      const savedConfig = app.savePluginOptions.mock.calls[0][0] as {
+        mayaraVersion: string
+      }
+      expect(savedConfig.mayaraVersion).toBe('v3.4.0')
+      await plugin.stop()
+    })
+
+    it('returns success even if persistence callback errors (non-fatal)', async () => {
+      // savePluginOptions failure is logged but does not roll back the
+      // already-running new container. The user just has to click Update
+      // again after a future plugin restart if they want it to stick.
+      const { router, app, plugin } = await loadPlugin()
+      app.savePluginOptions.mockImplementationOnce(
+        (_config: unknown, cb: (err: NodeJS.ErrnoException | null) => void) => {
+          const err = new Error('disk full') as NodeJS.ErrnoException
+          err.code = 'ENOSPC'
+          cb(err)
+        }
+      )
+      const handler = getHandler(router, 'POST /api/update/apply')
+      const res = makeRes()
+      await handler({ body: { tag: 'v3.4.0' } }, res)
+      expect(res.statusCode).toBe(200)
+      expect(res.body).toEqual({ success: true, tag: 'v3.4.0' })
+      // Should have logged an error to app.error explaining the situation
+      expect(app.error).toHaveBeenCalled()
       await plugin.stop()
     })
   })

@@ -9,21 +9,22 @@ export interface MayaraServerAPI extends ServerAPI {
 }
 
 // =============================================================================
-// signalk-container v0.1.5 API mirror
+// signalk-container v0.1.6 API mirror
 // =============================================================================
 //
 // These types are intentionally hand-rolled rather than imported from the
 // signalk-container package, to keep mayara loosely coupled (only a runtime
-// `peerDependencies` declaration, no compile-time import). The source of
-// truth lives at:
+// `peerDependencies` declaration, no compile-time import).
 //
-//   /home/dirk/dev/signalk-container/src/types.ts                — interfaces
-//   /home/dirk/dev/signalk-container/src/updates/types.ts        — update service
+// The source of truth lives in the signalk-container repository at:
+//   https://github.com/dirkwa/signalk-container
+//   - src/types.ts            — top-level container manager interfaces
+//   - src/updates/types.ts    — update detection service
 //
 // When signalk-container's API changes, mirror the relevant subset here. Only
 // the methods mayara actually uses need to be declared.
 //
-// Last synced against signalk-container: v0.1.5
+// Last synced against signalk-container: v0.1.6
 
 export type ContainerState = 'running' | 'stopped' | 'missing' | 'no-runtime'
 
