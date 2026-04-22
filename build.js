@@ -21,15 +21,15 @@ function main() {
   fs.mkdirSync(publicDest, { recursive: true })
   fs.mkdirSync(path.join(publicDest, 'assets'), { recursive: true })
 
-  // Copy logo for webapp icon
-  const logoSrc = path.resolve(__dirname, '..', 'mayara-server', 'web', 'gui', 'assets', 'mayara_logo.png')
-  const logoFallback = path.resolve(__dirname, 'mayara-server', 'web', 'gui', 'assets', 'mayara_logo.png')
+  // Copy logo for webapp icon. SignalK resolves signalk.appIcon relative to
+  // public/, so the file must live at public/assets/mayara_logo.png in the
+  // published package.
+  const logoSrc = path.resolve(__dirname, 'assets', 'mayara_logo.png')
   const logoDest = path.join(publicDest, 'assets', 'mayara_logo.png')
-  if (fs.existsSync(logoSrc)) {
-    fs.copyFileSync(logoSrc, logoDest)
-  } else if (fs.existsSync(logoFallback)) {
-    fs.copyFileSync(logoFallback, logoDest)
+  if (!fs.existsSync(logoSrc)) {
+    throw new Error(`Logo source missing: ${logoSrc}`)
   }
+  fs.copyFileSync(logoSrc, logoDest)
 
   // Create redirect page
   fs.writeFileSync(
