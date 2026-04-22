@@ -59,7 +59,7 @@ describe('createRadarProvider', () => {
   it('getRadars returns empty on error', async () => {
     const client = createMockClient({
       getRadars: vi.fn().mockRejectedValue(new Error('connection refused'))
-    } as unknown as Partial<MayaraClient>)
+    })
     const provider = createRadarProvider(client, createMockApp())
 
     const ids = await provider.getRadars()
@@ -106,7 +106,7 @@ describe('createRadarProvider', () => {
     const setControlFn = vi.fn().mockResolvedValue({ success: true })
     const client = createMockClient({
       setControl: setControlFn
-    } as unknown as Partial<MayaraClient>)
+    })
     const provider = createRadarProvider(client, createMockApp())
 
     const result = await provider.setPower?.('radar-0', 'transmit')
@@ -117,7 +117,7 @@ describe('createRadarProvider', () => {
   it('setPower returns false on error', async () => {
     const client = createMockClient({
       setControl: vi.fn().mockRejectedValue(new Error('timeout'))
-    } as unknown as Partial<MayaraClient>)
+    })
     const provider = createRadarProvider(client, createMockApp())
 
     const result = await provider.setPower?.('radar-0', 'transmit')

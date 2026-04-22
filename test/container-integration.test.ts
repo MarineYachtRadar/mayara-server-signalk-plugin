@@ -135,10 +135,10 @@ function makeMockContainerManager(): MockContainerManager {
           fetch: vi.fn(() => Promise.resolve(undefined)),
           _kind: 'githubReleases',
           _repo: repo
-        })) as unknown as ContainerManagerApi['updates']['sources']['githubReleases'],
+        })),
         dockerHubTags: vi.fn(() => ({
           fetch: vi.fn(() => Promise.resolve(undefined))
-        })) as unknown as ContainerManagerApi['updates']['sources']['dockerHubTags']
+        }))
       }
     }
   }

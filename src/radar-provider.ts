@@ -173,7 +173,7 @@ export function createRadarProvider(
 
     async setControls(radarId: string, controls: Partial<radar.RadarControls>): Promise<boolean> {
       try {
-        await client.setControls(radarId, controls as Record<string, unknown>)
+        await client.setControls(radarId, controls)
         return true
       } catch (err) {
         debug(
