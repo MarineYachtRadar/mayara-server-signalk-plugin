@@ -314,7 +314,7 @@ afterEach(() => {
   delete (globalThis as { __signalk_containerManager?: unknown }).__signalk_containerManager
 })
 
-describe('mayara-server-signalk-plugin v0.1.5 container integration', () => {
+describe('mayara-server-signalk-plugin container integration', () => {
   describe('startup ensureRunning call', () => {
     // Regression: 0.5.6 added signalk-plugin-enabled-by-default, which
     // makes Signal K call start() with `{}` on first install — schema
