@@ -314,14 +314,40 @@ afterEach(() => {
   delete (globalThis as { __signalk_containerManager?: unknown }).__signalk_containerManager
 })
 
-describe('mayara-server-signalk-plugin v0.1.5 container integration', () => {
+describe('mayara-server-signalk-plugin container integration', () => {
   describe('startup ensureRunning call', () => {
+    // Regression: 0.5.6 added signalk-plugin-enabled-by-default, which
+    // makes Signal K call start() with `{}` on first install — schema
+    // defaults are NOT injected. Without merging defaults at start()
+    // time, `settings.managedContainer` would be undefined and the
+    // container would never be started.
+    it('starts the container even when start() is called with empty config', async () => {
+      const containers = makeMockContainerManager()
+      globalThis.__signalk_containerManager = containers
+      const app = makeMockApp()
+      vi.resetModules()
+      const mod = (await import('../src/index')) as unknown as {
+        default: (a: unknown) => LoadedPlugin['plugin']
+      }
+      const plugin = mod.default(app)
+      plugin.registerWithRouter(makeRouter())
+
+      plugin.start({})
+      await new Promise<void>((resolve) => setTimeout(resolve, 50))
+
+      expect(containers._calls.ensureRunning.length).toBe(1)
+      const { config } = containers._calls.ensureRunning[0]
+      expect(config.tag).toBe('latest')
+      expect(config.resources).toBeDefined()
+      await plugin.stop()
+    })
+
     it('passes the default resource limits', async () => {
       const { containers, plugin } = await loadPlugin()
       expect(containers._calls.ensureRunning.length).toBe(1)
       const { config } = containers._calls.ensureRunning[0]
       expect(config.resources).toEqual({
-        cpus: 1.5,
+        cpus: 2,
         memory: '512m',
         memorySwap: '512m',
         pidsLimit: 200
@@ -459,7 +485,7 @@ describe('mayara-server-signalk-plugin v0.1.5 container integration', () => {
       expect(containers._calls.ensureRunning[0].config.tag).toBe('v3.4.0')
       // Resources still applied on update
       expect(containers._calls.ensureRunning[0].config.resources).toEqual({
-        cpus: 1.5,
+        cpus: 2,
         memory: '512m',
         memorySwap: '512m',
         pidsLimit: 200
