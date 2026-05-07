@@ -48,8 +48,13 @@ module.exports = function (app) {
         schema: schema_1.ConfigSchema,
         start(config) {
             app.debug('Starting mayara-server-signalk-plugin');
-            currentSettings = config;
-            void asyncStart(config).catch((err) => {
+            // Signal K does not seed schema defaults into the runtime config —
+            // when the plugin is auto-enabled (or enabled without saving the
+            // form), `config` is `{}`. Merge defaults so callers can rely on
+            // every field being present.
+            const merged = { ...schema_1.SCHEMA_DEFAULTS, ...config };
+            currentSettings = merged;
+            void asyncStart(merged).catch((err) => {
                 app.setPluginError(`Startup failed: ${err instanceof Error ? err.message : String(err)}`);
             });
         },

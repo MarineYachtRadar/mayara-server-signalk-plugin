@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ConfigSchema = void 0;
+exports.SCHEMA_DEFAULTS = exports.ConfigSchema = void 0;
 const typebox_1 = require("@sinclair/typebox");
 exports.ConfigSchema = typebox_1.Type.Object({
     managedContainer: typebox_1.Type.Boolean({
@@ -45,4 +45,21 @@ exports.ConfigSchema = typebox_1.Type.Object({
         maximum: 30
     })
 });
+// Signal K only uses the schema's `default` fields to seed the
+// JSON-schema form in the Admin UI. When the plugin is enabled by
+// default (signalk-plugin-enabled-by-default) or when a user enables
+// it without saving the form, `start()` is called with an empty
+// configuration object — the defaults above are never injected at
+// runtime. Materialise them here so we have one source of truth and
+// can spread them in `start()`.
+exports.SCHEMA_DEFAULTS = {
+    managedContainer: true,
+    mayaraVersion: 'latest',
+    mayaraArgs: [],
+    host: 'localhost',
+    port: 6502,
+    secure: false,
+    discoveryPollInterval: 10,
+    reconnectInterval: 5
+};
 //# sourceMappingURL=schema.js.map

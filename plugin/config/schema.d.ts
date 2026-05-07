@@ -10,4 +10,5 @@ export declare const ConfigSchema: import("@sinclair/typebox").TObject<{
     reconnectInterval: import("@sinclair/typebox").TNumber;
 }>;
 export type Config = Static<typeof ConfigSchema>;
+export declare const SCHEMA_DEFAULTS: Config;
 //# sourceMappingURL=schema.d.ts.map

@@ -9,7 +9,7 @@ import {
   ContainerResourceLimits,
   MayaraServerAPI
 } from './types'
-import { ConfigSchema, Config } from './config/schema'
+import { ConfigSchema, Config, SCHEMA_DEFAULTS } from './config/schema'
 
 const MAYARA_IMAGE = 'ghcr.io/marineyachtradar/mayara-server'
 const CONTAINER_NAME = 'mayara-server'
@@ -61,8 +61,13 @@ module.exports = function (app: MayaraServerAPI): Plugin {
 
     start(config: Partial<Config>) {
       app.debug('Starting mayara-server-signalk-plugin')
-      currentSettings = config
-      void asyncStart(config).catch((err: unknown) => {
+      // Signal K does not seed schema defaults into the runtime config —
+      // when the plugin is auto-enabled (or enabled without saving the
+      // form), `config` is `{}`. Merge defaults so callers can rely on
+      // every field being present.
+      const merged: Config = { ...SCHEMA_DEFAULTS, ...config }
+      currentSettings = merged
+      void asyncStart(merged).catch((err: unknown) => {
         app.setPluginError(`Startup failed: ${err instanceof Error ? err.message : String(err)}`)
       })
     },
