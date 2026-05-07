@@ -30,13 +30,17 @@
       "description": "Marine radar display connected to mayara-server",
       "location": "/plugins/@marineyachtradar/signalk-plugin/"
     },
+    "screenshots": [
+      "./docs/screenshot/mayara_screenshot_1.png"
+    ],
     "requires": [
       "signalk-container"
     ]
   },
   "files": [
     "plugin/**/*",
-    "public/**/*"
+    "public/**/*",
+    "docs/**/*"
   ],
   "engines": {
     "node": ">=22",
