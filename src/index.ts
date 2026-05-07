@@ -28,7 +28,7 @@ const SAFE_TAG = /^[a-zA-Z0-9._-]+$/
  *   signalk-container/doc/plugin-developer-guide.md §"Resource Limits"
  */
 const DEFAULT_RESOURCES: ContainerResourceLimits = {
-  cpus: 1.5,
+  cpus: 2,
   memory: '512m',
   memorySwap: '512m', // = memory → swap disabled (recommended on Pi/eMMC)
   pidsLimit: 200

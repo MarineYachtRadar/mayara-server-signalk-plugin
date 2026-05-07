@@ -72,7 +72,7 @@ The plugin sets sensible default resource caps so a runaway container can't take
 
 | Setting        | Default | Why                                                  |
 | -------------- | ------- | ---------------------------------------------------- |
-| `cpus`         | `1.5`   | Mayara processing peaks ≈ 1 core; 50% headroom        |
+| `cpus`         | `2`     | Mayara processing peaks ≈ 1 core; headroom for spikes and multi-radar |
 | `memory`       | `512m`  | Hard memory cap, OOM-killed if exceeded              |
 | `memorySwap`   | `512m`  | = memory → swap disabled (recommended on Pi/eMMC)     |
 | `pidsLimit`    | `200`   | Bounds runaway thread leaks                          |
@@ -82,7 +82,7 @@ Tested on a Pi 5 8GB with a Garmin xHD2 at 24 NM range. If your setup needs diff
 ```json
 {
   "mayara-server": {
-    "cpus": 2.0,
+    "cpus": 3.0,
     "memory": "1g",
     "memorySwap": "1g"
   }
