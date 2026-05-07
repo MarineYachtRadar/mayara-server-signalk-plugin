@@ -28,7 +28,10 @@
       "name": "MaYaRa Radar",
       "description": "Marine radar display connected to mayara-server",
       "location": "/plugins/@marineyachtradar/signalk-plugin/"
-    }
+    },
+    "requires": [
+      "signalk-container"
+    ]
   },
   "files": [
     "plugin/**/*",
