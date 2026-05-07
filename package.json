@@ -1,8 +1,9 @@
 {
   "name": "@marineyachtradar/signalk-plugin",
-  "version": "0.5.5",
+  "version": "0.5.6",
   "description": "MaYaRa Radar - Connect SignalK to mayara-server",
   "main": "plugin/index.js",
+  "signalk-plugin-enabled-by-default": true,
   "scripts": {
     "format": "prettier --write 'src/**/*.ts' 'test/**/*.ts' && eslint --fix 'src/**/*.ts' 'test/**/*.ts'",
     "lint": "eslint 'src/**/*.ts' 'test/**/*.ts'",
