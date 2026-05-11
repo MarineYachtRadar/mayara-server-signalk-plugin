@@ -80,6 +80,12 @@ When the plugin is auto-enabled (`signalk-plugin-enabled-by-default: true`), `st
 
 The signalk-container plugin exposes its API on `globalThis.__signalk_containerManager`, not on the `app` object. Signal K passes each plugin a shallow copy of `app`, so properties added to it are not visible across plugins. `getContainerManager()` in `src/index.ts` is the typed accessor; always handle the `undefined` case (signalk-container may not have finished its own `start()` yet, or the user may have it disabled).
 
+`waitForContainerManager()` first polls for the global to appear (signalk-container's `start()` may run after mayara's on a cold boot), then awaits `containers.whenReady()` (1.6.0+) to let runtime detection settle. After the await, re-check `getRuntime()` — `whenReady()` resolves on success OR failure of detection.
+
+### Container config-change detection is centralized
+
+signalk-container ≥1.6.0 diffs the requested `ContainerConfig` against the live container in `ensureRunning` and recreates transparently on drift across `image+tag`, `command`, `networkMode`, `env`, `volumes`, and `ports`. Resources still follow the live-update path. Mayara does **not** maintain a local `.container-hash` file — call `ensureRunning` with the same config every start and let signalk-container handle drift. A static guard in `test/container-integration.test.ts` ("src/index.ts does not import fs") catches accidental re-introduction of the old hash pattern.
+
 ### Build artifacts in `plugin/`
 
 `plugin/*.js` is in `.gitignore` but several files (`plugin/index.js`, `plugin/config/*`) are tracked from before the gitignore rule. When source changes, **rebuild and commit the corresponding `plugin/` artifact** alongside the source change so `git diff` stays honest. The `prepublishOnly` hook also rebuilds before npm publish, so the published tarball is always correct regardless.
@@ -91,7 +97,7 @@ The signalk-container plugin exposes its API on `globalThis.__signalk_containerM
 ## Dependencies
 
 - Signal K Server ≥ 2.24.0 (Radar API requirement)
-- signalk-container ≥ 0.1.6 (declared in `peerDependenciesMeta` as optional and in `signalk.requires`)
+- signalk-container ≥ 1.6.0 (declared in `peerDependenciesMeta` as optional and in `signalk.requires`)
 - Node ≥ engines floor in `package.json` (CI matrix tests Node 22 and 24)
 
 When bumping the Node engines floor, update **all** of: `package.json` engines, `package.json` `@types/node`, `.github/dependabot.yml` comment, and the README prerequisites line.

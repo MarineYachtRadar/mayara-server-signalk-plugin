@@ -9,7 +9,7 @@ export interface MayaraServerAPI extends ServerAPI {
 }
 
 // =============================================================================
-// signalk-container v0.1.6 API mirror
+// signalk-container v1.6.0 API mirror
 // =============================================================================
 //
 // These types are intentionally hand-rolled rather than imported from the
@@ -24,7 +24,7 @@ export interface MayaraServerAPI extends ServerAPI {
 // When signalk-container's API changes, mirror the relevant subset here. Only
 // the methods mayara actually uses need to be declared.
 //
-// Last synced against signalk-container: v0.1.6
+// Last synced against signalk-container: v1.6.0
 
 export type ContainerState = 'running' | 'stopped' | 'missing' | 'no-runtime'
 
@@ -132,6 +132,13 @@ export interface UpdateServiceApi {
 
 export interface ContainerManagerApi {
   getRuntime: () => ContainerRuntimeInfo | null
+  /**
+   * Resolves once runtime detection has settled (success OR failure).
+   * `getRuntime()` is guaranteed non-null only when this resolves AND
+   * detection succeeded — callers should re-check after the await.
+   * Available in signalk-container 1.6.0+.
+   */
+  whenReady: () => Promise<void>
   pullImage: (image: string, onProgress?: (msg: string) => void) => Promise<void>
   imageExists: (image: string) => Promise<boolean>
   getImageDigest: (imageOrContainer: string) => Promise<string | null>

@@ -6,7 +6,7 @@ A SignalK plugin that connects to [mayara-server](https://github.com/MarineYacht
 
 - **SignalK Server ≥ 2.24.0** (the Radar API ships in 2.24.0+)
 - **Node.js ≥ 22** (tested on Node 22 and 24)
-- **[signalk-container](https://github.com/dirkwa/signalk-container) ≥ 0.1.6** (for managed container mode, optional)
+- **[signalk-container](https://github.com/dirkwa/signalk-container) ≥ 1.6.0** (for managed container mode, optional)
 - **Podman** or **Docker** runtime (for managed container mode)
 
 ## How It Works

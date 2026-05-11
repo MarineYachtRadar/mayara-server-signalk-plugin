@@ -1,6 +1,5 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-const fs_1 = require("fs");
 const mayara_client_1 = require("./mayara-client");
 const radar_provider_1 = require("./radar-provider");
 const spoke_forwarder_1 = require("./spoke-forwarder");
@@ -192,26 +191,14 @@ module.exports = function (app) {
                     // no way to roll back to the previous state — the old container's
                     // ID and config are gone. Surface a clear error so the user knows
                     // they need to retry the apply rather than seeing a generic 500.
-                    const newConfig = buildContainerConfig(tag);
                     try {
-                        await containers.ensureRunning(CONTAINER_NAME, newConfig);
+                        await containers.ensureRunning(CONTAINER_NAME, buildContainerConfig(tag));
                     }
                     catch (recreateErr) {
                         const msg = `Container removed but recreation failed: ${errMsg(recreateErr)}. Click Update again to retry.`;
                         app.setPluginError(msg);
                         res.status(500).json({ error: msg });
                         return;
-                    }
-                    // Refresh the hash file so the next plugin restart sees
-                    // matching config and doesn't trigger a redundant recreate
-                    // in startManagedContainer().
-                    try {
-                        (0, fs_1.writeFileSync)(`${app.getDataDirPath()}.container-hash`, computeConfigHash(newConfig));
-                    }
-                    catch (hashErr) {
-                        // Non-fatal: a stale hash will just cause one extra recreate
-                        // on the next plugin restart. Log and continue.
-                        app.debug(`Failed to refresh container-hash: ${errMsg(hashErr)}`);
                     }
                     // Persist the new tag to disk so a plugin restart doesn't roll
                     // back to the previous version. We update the in-memory copy
@@ -301,36 +288,35 @@ module.exports = function (app) {
             resources: DEFAULT_RESOURCES
         };
     }
-    // Stable JSON of every ContainerConfig field that affects the
-    // resulting `podman run` invocation. Used by both startup and the
-    // /api/update/apply route so they can never drift on what counts
-    // as a "config change".
-    function computeConfigHash(config) {
-        return JSON.stringify({
-            image: config.image,
-            tag: config.tag,
-            command: config.command,
-            networkMode: config.networkMode,
-            restart: config.restart,
-            resources: config.resources
-        });
-    }
     /**
-     * Wait up to 30 seconds for signalk-container to finish runtime
-     * detection. Returns the container manager handle, or undefined
-     * if it never became ready (in which case the caller should set
-     * a plugin error).
+     * Wait up to `timeoutMs` for signalk-container to be both loaded
+     * (cross-plugin global populated) and finished with runtime detection.
+     * Returns the container manager handle, or undefined if either phase
+     * timed out or detection failed. Caller sets a plugin error on
+     * undefined.
      */
     async function waitForContainerManager(timeoutMs = 30000) {
         const deadline = Date.now() + timeoutMs;
-        while (Date.now() < deadline) {
-            const containers = getContainerManager();
-            if (containers?.getRuntime())
-                return containers;
-            app.setPluginStatus('Waiting for container runtime detection...');
-            await new Promise((resolve) => setTimeout(resolve, 1000));
+        // Phase 1: poll for the cross-plugin global. signalk-container's
+        // start() may not have run yet on a fresh SK boot.
+        let containers = getContainerManager();
+        while (!containers && Date.now() < deadline) {
+            app.setPluginStatus('Waiting for signalk-container plugin to load...');
+            await new Promise((resolve) => setTimeout(resolve, 500));
+            containers = getContainerManager();
         }
-        return undefined;
+        if (!containers)
+            return undefined;
+        // Phase 2: await whenReady() with a remaining-time cap. whenReady()
+        // resolves on success OR failure of runtime detection, so re-check
+        // getRuntime() afterwards.
+        app.setPluginStatus('Waiting for container runtime detection...');
+        const remaining = Math.max(0, deadline - Date.now());
+        await Promise.race([
+            containers.whenReady(),
+            new Promise((resolve) => setTimeout(resolve, remaining))
+        ]);
+        return containers.getRuntime() ? containers : undefined;
     }
     async function startManagedContainer(settings) {
         const containers = await waitForContainerManager();
@@ -342,40 +328,12 @@ module.exports = function (app) {
         app.setPluginStatus('Starting mayara-server container...');
         const tag = settings.mayaraVersion ?? 'latest';
         const config = buildContainerConfig(tag);
-        // signalk-container's ensureRunning early-returns on a running
-        // container without diffing command/network/tag — only resource
-        // limits get a live update. So a change to mayaraArgs (or the
-        // tag, or any other field) on its own would be ignored when the
-        // container is already running. Hash the rendered config and
-        // force a remove+recreate when it differs from the last
-        // successful start. Same pattern as signalk-questdb / grafana.
-        const configHash = computeConfigHash(config);
-        const hashFile = `${app.getDataDirPath()}.container-hash`;
-        let lastHash = '';
-        try {
-            lastHash = (0, fs_1.readFileSync)(hashFile, 'utf8');
-        }
-        catch {
-            /* first run — no prior hash */
-        }
-        const state = await containers.getState(CONTAINER_NAME);
-        if (state !== 'missing' && configHash !== lastHash) {
-            app.debug('Container config changed since last start — removing for recreate');
-            app.setPluginStatus('Recreating mayara-server container (config changed)...');
-            await containers.remove(CONTAINER_NAME);
-        }
+        // signalk-container ≥1.6.0 diffs ContainerConfig against the live
+        // container on every ensureRunning call and recreates transparently
+        // on drift across image+tag, command, networkMode, env, volumes,
+        // and ports. Resources follow the live-update path. No local hash
+        // tracking needed.
         await containers.ensureRunning(CONTAINER_NAME, config);
-        try {
-            (0, fs_1.writeFileSync)(hashFile, configHash);
-        }
-        catch (hashErr) {
-            // Non-fatal: a failed hash write just means the next plugin
-            // restart will recompute drift and recreate the container
-            // even though nothing actually changed. Log and continue so a
-            // disk-full / read-only-fs condition doesn't take down the
-            // whole plugin start.
-            app.debug(`Failed to persist container-hash: ${errMsg(hashErr)}`);
-        }
         // Register with the centralized update service. The service auto-
         // detects whether `tag` is a semver pin (compare via GitHub releases)
         // or a floating tag like `latest`/`main` (digest drift detection).
