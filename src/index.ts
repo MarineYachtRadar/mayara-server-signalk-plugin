@@ -351,6 +351,7 @@ module.exports = function (app: MayaraServerAPI): Plugin {
       tag: config.tag,
       command: config.command,
       networkMode: config.networkMode,
+      restart: config.restart,
       resources: config.resources
     })
   }
@@ -413,7 +414,16 @@ module.exports = function (app: MayaraServerAPI): Plugin {
     }
 
     await containers.ensureRunning(CONTAINER_NAME, config)
-    writeFileSync(hashFile, configHash)
+    try {
+      writeFileSync(hashFile, configHash)
+    } catch (hashErr) {
+      // Non-fatal: a failed hash write just means the next plugin
+      // restart will recompute drift and recreate the container
+      // even though nothing actually changed. Log and continue so a
+      // disk-full / read-only-fs condition doesn't take down the
+      // whole plugin start.
+      app.debug(`Failed to persist container-hash: ${errMsg(hashErr)}`)
+    }
 
     // Register with the centralized update service. The service auto-
     // detects whether `tag` is a semver pin (compare via GitHub releases)
