@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { readFileSync } from 'fs'
+import { existsSync, readFileSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import type {
   ContainerConfig,
@@ -303,15 +303,24 @@ async function loadPlugin(initialConfig: Record<string, unknown> = {}): Promise<
 // Tests
 // =============================================================================
 
+// Mirrors `${app.getDataDirPath()}.container-hash` — see `makeMockApp`
+// (data dir = '/tmp/mayara-test', so hash file is its sibling in /tmp).
+const TEST_HASH_FILE = '/tmp/mayara-test.container-hash'
+
 beforeEach(() => {
   // Wipe the global between tests so they're isolated.
   delete (globalThis as { __signalk_containerManager?: unknown }).__signalk_containerManager
+  // The container-hash file is keyed off getDataDirPath(); leaving a
+  // stale one between tests would make the "did config change since
+  // last start" check non-deterministic across test ordering.
+  if (existsSync(TEST_HASH_FILE)) unlinkSync(TEST_HASH_FILE)
 })
 
 afterEach(() => {
   // Each test calls plugin.stop() explicitly; this is a safety net to
   // make sure the global doesn't leak across tests.
   delete (globalThis as { __signalk_containerManager?: unknown }).__signalk_containerManager
+  if (existsSync(TEST_HASH_FILE)) unlinkSync(TEST_HASH_FILE)
 })
 
 describe('mayara-server-signalk-plugin container integration', () => {
@@ -391,6 +400,109 @@ describe('mayara-server-signalk-plugin container integration', () => {
       expect(config.command?.filter((a) => a === '-n').length).toBe(1)
       expect(config.command).toContain('tcp:0.0.0.0:9999')
       await plugin.stop()
+    })
+  })
+
+  describe('hash-based recreation on config change', () => {
+    // Regression: v0.5.3 (commit 9cad988) removed the hash-file
+    // recreation pattern under the assumption that signalk-container
+    // diffs ContainerConfig in ensureRunning. It does not — only
+    // resource limits get a live update; command/network/tag changes
+    // on an already-running container are silently ignored. This left
+    // mayaraArgs edits in the UI doing nothing on hosts where the
+    // container had already been created (reported by Marcel,
+    // openplotter Pi).
+
+    it('writes the hash file on first successful start', async () => {
+      const { plugin } = await loadPlugin({ mayaraArgs: ['--brand', 'furuno'] })
+      expect(existsSync(TEST_HASH_FILE)).toBe(true)
+      const written = readFileSync(TEST_HASH_FILE, 'utf8')
+      expect(written).toContain('"command"')
+      expect(written).toContain('furuno')
+      await plugin.stop()
+    })
+
+    it('does NOT call remove on a restart with unchanged config', async () => {
+      // First start: container is "running" per the mock and there's
+      // no prior hash, so the conservative path is to recreate. After
+      // stop(), the hash file remains. Second start with identical
+      // config should compare equal and skip the remove.
+      const first = await loadPlugin({ mayaraArgs: ['--brand', 'furuno'] })
+      await first.plugin.stop()
+
+      const second = await loadPlugin({ mayaraArgs: ['--brand', 'furuno'] })
+      expect(second.containers._calls.remove).toEqual([])
+      await second.plugin.stop()
+    })
+
+    it('calls remove on a restart when mayaraArgs changed', async () => {
+      const first = await loadPlugin({ mayaraArgs: ['--brand', 'furuno'] })
+      await first.plugin.stop()
+
+      const second = await loadPlugin({ mayaraArgs: ['--brand', 'navico'] })
+      expect(second.containers._calls.remove).toEqual(['mayara-server'])
+      // Recreate uses the new args.
+      const { config } = second.containers._calls.ensureRunning[0]
+      expect(config.command).toContain('navico')
+      await second.plugin.stop()
+    })
+
+    it('calls remove on a restart when mayaraVersion (tag) changed', async () => {
+      const first = await loadPlugin({ mayaraVersion: 'v3.5.0' })
+      await first.plugin.stop()
+
+      const second = await loadPlugin({ mayaraVersion: 'v3.5.1' })
+      expect(second.containers._calls.remove).toEqual(['mayara-server'])
+      await second.plugin.stop()
+    })
+
+    it('does NOT call remove when getState reports missing', async () => {
+      // Fresh install — there's no container to remove and no hash.
+      // The conservative recreate path must not fire on missing.
+      const containers = makeMockContainerManager()
+      containers.getState = vi.fn(() => Promise.resolve('missing' as const))
+      globalThis.__signalk_containerManager = containers
+      const app = makeMockApp()
+      vi.resetModules()
+      const mod = (await import('../src/index')) as unknown as {
+        default: (a: unknown) => LoadedPlugin['plugin']
+      }
+      const plugin = mod.default(app)
+      plugin.registerWithRouter(makeRouter())
+      plugin.start({
+        managedContainer: true,
+        mayaraVersion: 'latest',
+        mayaraArgs: ['--brand', 'furuno']
+      })
+      await new Promise<void>((resolve) => setTimeout(resolve, 50))
+
+      expect(containers._calls.remove).toEqual([])
+      expect(containers._calls.ensureRunning.length).toBe(1)
+      // Hash is still written so a later restart with unchanged config
+      // doesn't trigger an unnecessary recreate.
+      expect(existsSync(TEST_HASH_FILE)).toBe(true)
+      await plugin.stop()
+    })
+
+    it('refreshes the hash after /api/update/apply so the next start does not double-recreate', async () => {
+      const { router, plugin } = await loadPlugin({ mayaraVersion: 'v3.5.0' })
+      const handler = getHandler(router, 'POST /api/update/apply')
+      const hashBefore = readFileSync(TEST_HASH_FILE, 'utf8')
+
+      const res = makeRes()
+      await handler({ body: { tag: 'v3.5.1' } }, res)
+      expect(res.statusCode).toBe(200)
+
+      const hashAfter = readFileSync(TEST_HASH_FILE, 'utf8')
+      expect(hashAfter).not.toEqual(hashBefore)
+      expect(hashAfter).toContain('"tag":"v3.5.1"')
+      await plugin.stop()
+
+      // Simulate plugin restart at the new tag — must NOT trigger
+      // another remove, because the hash already matches.
+      const restart = await loadPlugin({ mayaraVersion: 'v3.5.1' })
+      expect(restart.containers._calls.remove).toEqual([])
+      await restart.plugin.stop()
     })
   })
 

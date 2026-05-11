@@ -1,5 +1,6 @@
 import { Plugin } from '@signalk/server-api'
 import { Request, Response, IRouter } from 'express'
+import { readFileSync, writeFileSync } from 'fs'
 import { MayaraClient } from './mayara-client'
 import { createRadarProvider } from './radar-provider'
 import { SpokeForwarder } from './spoke-forwarder'
@@ -215,13 +216,25 @@ module.exports = function (app: MayaraServerAPI): Plugin {
           // no way to roll back to the previous state — the old container's
           // ID and config are gone. Surface a clear error so the user knows
           // they need to retry the apply rather than seeing a generic 500.
+          const newConfig = buildContainerConfig(tag)
           try {
-            await containers.ensureRunning(CONTAINER_NAME, buildContainerConfig(tag))
+            await containers.ensureRunning(CONTAINER_NAME, newConfig)
           } catch (recreateErr) {
             const msg = `Container removed but recreation failed: ${errMsg(recreateErr)}. Click Update again to retry.`
             app.setPluginError(msg)
             res.status(500).json({ error: msg })
             return
+          }
+
+          // Refresh the hash file so the next plugin restart sees
+          // matching config and doesn't trigger a redundant recreate
+          // in startManagedContainer().
+          try {
+            writeFileSync(`${app.getDataDirPath()}.container-hash`, computeConfigHash(newConfig))
+          } catch (hashErr) {
+            // Non-fatal: a stale hash will just cause one extra recreate
+            // on the next plugin restart. Log and continue.
+            app.debug(`Failed to refresh container-hash: ${errMsg(hashErr)}`)
           }
 
           // Persist the new tag to disk so a plugin restart doesn't roll
@@ -328,6 +341,21 @@ module.exports = function (app: MayaraServerAPI): Plugin {
     }
   }
 
+  // Stable JSON of every ContainerConfig field that affects the
+  // resulting `podman run` invocation. Used by both startup and the
+  // /api/update/apply route so they can never drift on what counts
+  // as a "config change".
+  function computeConfigHash(config: ContainerConfig): string {
+    return JSON.stringify({
+      image: config.image,
+      tag: config.tag,
+      command: config.command,
+      networkMode: config.networkMode,
+      restart: config.restart,
+      resources: config.resources
+    })
+  }
+
   /**
    * Wait up to 30 seconds for signalk-container to finish runtime
    * detection. Returns the container manager handle, or undefined
@@ -362,11 +390,40 @@ module.exports = function (app: MayaraServerAPI): Plugin {
     const tag = settings.mayaraVersion ?? 'latest'
     const config = buildContainerConfig(tag)
 
-    // signalk-container handles its own config-change detection: when
-    // ensureRunning sees a config that differs from what it created the
-    // container with, it recreates. We no longer maintain a local hash
-    // file. Tag changes specifically are handled by the update service.
+    // signalk-container's ensureRunning early-returns on a running
+    // container without diffing command/network/tag — only resource
+    // limits get a live update. So a change to mayaraArgs (or the
+    // tag, or any other field) on its own would be ignored when the
+    // container is already running. Hash the rendered config and
+    // force a remove+recreate when it differs from the last
+    // successful start. Same pattern as signalk-questdb / grafana.
+    const configHash = computeConfigHash(config)
+    const hashFile = `${app.getDataDirPath()}.container-hash`
+    let lastHash = ''
+    try {
+      lastHash = readFileSync(hashFile, 'utf8')
+    } catch {
+      /* first run — no prior hash */
+    }
+
+    const state = await containers.getState(CONTAINER_NAME)
+    if (state !== 'missing' && configHash !== lastHash) {
+      app.debug('Container config changed since last start — removing for recreate')
+      app.setPluginStatus('Recreating mayara-server container (config changed)...')
+      await containers.remove(CONTAINER_NAME)
+    }
+
     await containers.ensureRunning(CONTAINER_NAME, config)
+    try {
+      writeFileSync(hashFile, configHash)
+    } catch (hashErr) {
+      // Non-fatal: a failed hash write just means the next plugin
+      // restart will recompute drift and recreate the container
+      // even though nothing actually changed. Log and continue so a
+      // disk-full / read-only-fs condition doesn't take down the
+      // whole plugin start.
+      app.debug(`Failed to persist container-hash: ${errMsg(hashErr)}`)
+    }
 
     // Register with the centralized update service. The service auto-
     // detects whether `tag` is a semver pin (compare via GitHub releases)
