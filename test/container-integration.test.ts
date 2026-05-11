@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { existsSync, readFileSync, unlinkSync } from 'fs'
+import { tmpdir } from 'os'
 import { join } from 'path'
 import type {
   ContainerConfig,
@@ -161,13 +162,21 @@ interface MockApp {
   binaryStreamManager: undefined
 }
 
+// Real per-OS tmp path — Windows runners don't have a /tmp directory,
+// so writeFileSync against /tmp/mayara-test.container-hash fails with
+// ENOENT. tmpdir() returns C:\Users\…\AppData\Local\Temp on Windows
+// and /tmp on Linux/macOS. Both the mock app and TEST_HASH_FILE
+// derive from this single constant so they cannot drift.
+const TEST_DATA_DIR = join(tmpdir(), 'mayara-test')
+const TEST_HASH_FILE = `${TEST_DATA_DIR}.container-hash`
+
 function makeMockApp(): MockApp {
   return {
     debug: vi.fn(),
     error: vi.fn(),
     setPluginStatus: vi.fn(),
     setPluginError: vi.fn(),
-    getDataDirPath: () => '/tmp/mayara-test',
+    getDataDirPath: () => TEST_DATA_DIR,
     // SignalK persistence API: writes to plugin-config-data/<pluginId>.json
     // The signature is (config, callback) where callback gets a NodeJS.ErrnoException | null.
     savePluginOptions: vi.fn(
@@ -302,10 +311,6 @@ async function loadPlugin(initialConfig: Record<string, unknown> = {}): Promise<
 // =============================================================================
 // Tests
 // =============================================================================
-
-// Mirrors `${app.getDataDirPath()}.container-hash` — see `makeMockApp`
-// (data dir = '/tmp/mayara-test', so hash file is its sibling in /tmp).
-const TEST_HASH_FILE = '/tmp/mayara-test.container-hash'
 
 beforeEach(() => {
   // Wipe the global between tests so they're isolated.
