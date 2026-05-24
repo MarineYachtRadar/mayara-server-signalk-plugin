@@ -74,7 +74,7 @@ The plugin uses the standard Signal K device-access-request flow to obtain one. 
 
 1. **On first start**, the plugin POSTs a `readwrite` access request for `clientId = mayara-server-signalk-plugin`. The request appears in your admin UI under **Security → Access Requests** with description _"MaYaRa Radar (Server) — AIS overlay seeding + radar/target/notification writebacks"_.
 2. Plugin status changes to _"Awaiting Signal K token approval — see Security → Access Requests"_. Approve the request once. (Mayara may also push radar targets, MARPA tracks, and notifications back to Signal K in future releases — hence the `readwrite` scope.)
-3. The plugin caches the issued JWT to `${dataDir}/plugin-config-data/mayara-server-signalk-plugin/signalk-token` (mode `0600`) and recreates the container with `-n ws:127.0.0.1:${PORT}` plus `--signalk-token-file /run/mayara/token`.
+3. The plugin caches the issued JWT to a `signalk-token` file in its plugin data directory (mode `0600`) — typically `~/.signalk/plugin-config-data/mayara-server-signalk-plugin/signalk-token` — and recreates the container with `-n ws:127.0.0.1:${PORT}` plus `--signalk-token-file /run/mayara/token`.
 4. Subsequent restarts reuse the cached token — no further admin interaction.
 
 Until the request is approved (or if you deny it), the container runs with `-n tcp:127.0.0.1:${TCPSTREAMPORT}` instead. Navigation deltas still flow, only the initial AIS REST snapshot is skipped (the overlay then fills from live deltas as vessels are heard).
