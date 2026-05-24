@@ -1,0 +1,191 @@
+language: en-US
+
+reviews:
+  profile: assertive
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+    # Skip mechanical PRs that don't benefit from review.
+    # `chore(release):` PRs are version-bump-only; the substantive
+    # change was already reviewed on its own PR. Dep-bump PRs come from
+    # automation that has its own contract with the registry. WIP and
+    # explicit skip markers are author opt-outs.
+    ignore_title_keywords:
+      - "chore(release):"
+      - "chore(deps):"
+      - "chore(deps-dev):"
+      - "[skip review]"
+      - "WIP"
+    ignore_usernames:
+      - "release-please[bot]"
+      - "renovate[bot]"
+      - "dependabot[bot]"
+      - "github-actions[bot]"
+
+  # `plugin/` is the TypeScript + webpack build output; tracked because
+  # the App Store install path needs it, but never authored by hand
+  # (the source of truth is `src/`). Everything under node_modules and
+  # generated lockfiles are also off-limits to review.
+  path_filters:
+    - "!plugin/**"
+    - "!**/node_modules/**"
+    - "!**/package-lock.json"
+    - "!**/yarn.lock"
+    - "!**/pnpm-lock.yaml"
+    - "!**/*.min.js"
+    - "!**/*.min.css"
+
+  high_level_summary_instructions: |
+    Write summaries in present tense. Describe what the code does, not
+    what it did. Skip filler like "This PR" — go straight to the change.
+
+  path_instructions:
+    - path: "**/*"
+      instructions: |
+        ## Scope
+
+        Focus on files changed since `main`. Think carefully about how
+        changes interact with existing code, tests, and documentation —
+        not just the diff in isolation.
+
+        `@marineyachtradar/signalk-plugin` is a **Signal K server plugin**
+        that bridges the Signal K Radar API to a `mayara-server` instance.
+        It runs inside the SignalK server process and acts as a thin
+        proxy: it registers as a Radar API provider, forwards control
+        commands over HTTP, and pipes binary spoke data via Signal K's
+        `binaryStreamManager`. All radar protocol handling lives in
+        mayara-server, not here.
+
+        Two operating modes:
+          - **Container mode** (default): manages the mayara-server
+            container via the [signalk-container] plugin's API exposed
+            on `globalThis.__signalk_containerManager`.
+          - **External mode**: connects to a mayara-server running
+            elsewhere via host/port.
+
+        The React config panel ships via Module Federation through
+        signalk-container's host so users get a custom config page in
+        the Signal K admin UI rather than the default JSON form.
+
+        ## TypeScript strict / Node 22+
+
+        - All new code in TypeScript. No new `.js` source files.
+        - tsconfig is strict. Avoid `any`. The one allowed escape is
+          the cast on `(globalThis as any).__signalk_containerManager`
+          inside `getContainerManager()` because the consumer side
+          cannot take a compile-time dependency on signalk-container.
+        - Reuse types from `src/types.ts` rather than redefining.
+          `ContainerConfig`, `ContainerManagerApi`,
+          `ContainerResourceLimits`, etc. are the public vocabulary,
+          mirroring signalk-container's API surface.
+
+        ## Schema defaults are not injected at runtime
+
+        Signal K only uses the schema's `default` annotations to seed
+        the JSON-schema form in the Admin UI. When a plugin is
+        auto-enabled (`signalk-plugin-enabled-by-default: true`),
+        `start()` is called with an empty `{}` and defaults are NOT
+        materialised into the runtime config object.
+
+        `src/config/schema.ts` exports `SCHEMA_DEFAULTS`; `start()`
+        in `src/index.ts` spreads it under the incoming config. Flag
+        any change to `start()` that drops this merge — there's a
+        regression test ("starts the container even when start() is
+        called with empty config") guarding it.
+
+        ## Container config-change detection is centralized
+
+        signalk-container ≥1.6.0 diffs the requested `ContainerConfig`
+        against the live container in `ensureRunning` and recreates
+        transparently on drift across `image+tag`, `command`,
+        `networkMode`, `env`, `volumes`, and `ports`. Mayara does NOT
+        maintain a local `.container-hash` file — call `ensureRunning`
+        with the desired config every start and let signalk-container
+        handle drift. A static guard in
+        `test/container-integration.test.ts` (`src/index.ts does not
+        import fs`) catches accidental re-introduction of the old
+        hash-file pattern. Flag any new `fs` imports in `src/index.ts`
+        unless they're for a justified reason like the token-file
+        cache (which lives in `src/signalk-token.ts`, not in
+        index.ts).
+
+        ## Signal K device-token flow
+
+        When SignalK security is enabled, the managed mayara container
+        needs an authenticated upstream channel so the AIS overlay can
+        seed itself from `/signalk/v1/api/vessels/`. The plugin drives
+        the standard SK device-access-request flow:
+
+        1. On start, `ensureSignalkToken()` POSTs `/signalk/v1/access/requests`
+           with `clientId = mayara-server-signalk-plugin` and
+           `permissions: 'readwrite'` (broad scope reserved for future
+           radar/target/notification writebacks — SK admin UI cannot
+           widen permissions post-approval, only revoke + re-request).
+        2. Until the admin approves in `Security → Access Requests`,
+           the container runs with `-n tcp:127.0.0.1:${TCPSTREAMPORT}`
+           (nav deltas work; only the AIS REST snapshot is skipped).
+        3. On approval, `awaitApproval()` extracts the JWT, caches it
+           to `${app.getDataDirPath()}/signalk-token` (mode 0600), and
+           recreates the container with `-n ws:127.0.0.1:${PORT}` plus
+           `--signalk-token-file /run/mayara/token` bind-mounted.
+        4. `requestSignalkToken: false` in plugin config opts out.
+
+        Flag changes that:
+          - drop the `readwrite` scope without good reason (operators
+            can't widen later via the UI)
+          - cache the token anywhere other than `app.getDataDirPath()`
+            (mounts assume this path)
+          - skip the cancellation flag (`tokenPollerCancelled`) in
+            `stop()` — the poller will outlive the plugin otherwise
+
+        ## Container user UID mapping
+
+        The mayara image declares `USER mayara` with UID/GID 1000.
+        `buildContainerConfig` in `src/index.ts` MUST declare
+        `user: { inImageUid: 1000, inImageGid: 1000 }` so
+        signalk-container emits the right mapping flag
+        (`--userns=keep-id:uid=1000,gid=1000` on rootless podman,
+        `--user 1000:1000` on docker/rootful). Without that, the
+        in-image UID 1000 lands in the subuid range on the host and
+        the bind-mounted `signalk-token` file (mode 0600 owned by the
+        SK server's host user) is unreadable from inside the
+        container. There's a test ("declares the mayara image
+        in-image UID/GID for correct uid mapping") guarding it.
+
+        ## Tests
+
+        - Test runner is `vitest`. Tests in `test/*.test.ts`.
+        - All new code requires tests. Test behavior at the function
+          boundary, not internal control flow.
+        - The plugin's external collaborators (mayara-client,
+          signalk-container API, fetch) are mocked at the top of
+          `test/container-integration.test.ts` and
+          `test/signalk-token.test.ts`. Default stubs are reset in
+          `beforeEach()` so call counts don't leak between tests —
+          when adding new mocks, follow the same reset pattern.
+        - The pre-PR command is `npm run build:all` (lint + build +
+          test). Flag PRs that obviously didn't run it (e.g. tracked
+          `plugin/` artifacts not aligned with `src/` changes).
+
+        ## Build artifacts in `plugin/`
+
+        `plugin/*.js` is in `.gitignore` but several files
+        (`plugin/index.js`, `plugin/config/*`) are tracked from before
+        the gitignore rule. When source changes, rebuild and commit
+        the corresponding `plugin/` artifact alongside the source
+        change so `git diff` stays honest. The `prepublishOnly` hook
+        also rebuilds before npm publish, so the published tarball
+        is always correct regardless. Flag PRs where tracked
+        `plugin/` files have drifted from `src/`.
+
+        ## Echo comments
+
+        Flag any comment that merely restates what the code already
+        says. Examples to flag:
+          - `// Sets the value` above an obvious setter
+          - `// Loop through items` above a `for` loop
+          - `// returns null on failure` next to `return null` in an
+            error branch
+
+        Replace with comments explaining _why_, not _what_. Or delete.

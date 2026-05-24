@@ -86,6 +86,27 @@ The signalk-container plugin exposes its API on `globalThis.__signalk_containerM
 
 signalk-container ≥1.6.0 diffs the requested `ContainerConfig` against the live container in `ensureRunning` and recreates transparently on drift across `image+tag`, `command`, `networkMode`, `env`, `volumes`, and `ports`. Resources still follow the live-update path. Mayara does **not** maintain a local `.container-hash` file — call `ensureRunning` with the same config every start and let signalk-container handle drift. A static guard in `test/container-integration.test.ts` ("src/index.ts does not import fs") catches accidental re-introduction of the old hash pattern.
 
+### Signal K device-token flow
+
+When Signal K security is enabled, the managed mayara container needs an authenticated upstream channel so the AIS overlay can seed itself from `/signalk/v1/api/vessels/` (without it, the overlay only fills from live deltas, ~5–60 s per vessel). The plugin drives the standard SK device-access-request flow rather than asking the operator to mint and paste a token.
+
+The flow lives in `src/signalk-token.ts` + `ensureSignalkToken()` in `src/index.ts`:
+
+1. On start, POST `/signalk/v1/access/requests` with `clientId = mayara-server-signalk-plugin` and `permissions: 'readwrite'`. The broad scope is deliberate — SK admin UI cannot widen permissions post-approval, only revoke + re-request, and mayara's roadmap includes pushing radar targets / MARPA tracks / notifications back to Signal K.
+2. Until the admin approves in **Security → Access Requests**, the container runs with `-n tcp:127.0.0.1:${TCPSTREAMPORT}` so nav deltas still flow.
+3. On approval, `awaitApproval()` extracts the JWT, caches it to `${app.getDataDirPath()}/signalk-token` (mode `0600`), and recreates the container with `-n ws:127.0.0.1:${PORT}` plus `--signalk-token-file /run/mayara/token` bind-mounted in.
+4. `requestSignalkToken: false` in plugin config opts out entirely (manual `--signalk-token-file` in `mayaraArgs` remains an escape hatch).
+
+Token-flow tests live in `test/signalk-token.test.ts` (module-level: cache helpers, POST branches, polling) and `test/container-integration.test.ts` (integration: opt-in/out, lifecycle, recreate-on-approval). The token module is mocked by default in container-integration tests so they don't issue stray HTTP requests against a non-existent local SK; token-flow tests override per-test via `vi.mocked()`. The `tokenPollerCancelled` flag in `start()`/`stop()` keeps the poller from outliving the plugin.
+
+### Container user UID mapping
+
+The mayara image declares `USER mayara` with UID/GID 1000. `buildContainerConfig` in `src/index.ts` declares `user: { inImageUid: 1000, inImageGid: 1000 }` so signalk-container emits the right uid-mapping flag — `--userns=keep-id:uid=1000,gid=1000` on rootless podman, `--user 1000:1000` on docker / rootful podman.
+
+Without this, signalk-container defaults `inImageUid` to 0, the rootless-podman mapping puts the in-image UID 1000 at host UID `100999` (the subuid range), and the bind-mounted `signalk-token` file (mode `0600` owned by the SK server's host user) is unreadable from inside the container. The symptom is a crash-looping mayara container logging "Failed to install Signal K token: Permission denied".
+
+Test guard: "declares the mayara image in-image UID/GID for correct uid mapping" in `test/container-integration.test.ts`. Don't remove the `user` field from `buildContainerConfig` without first verifying that the bind-mount file ownership story still works on rootless podman.
+
 ### Build artifacts in `plugin/`
 
 `plugin/*.js` is in `.gitignore` but several files (`plugin/index.js`, `plugin/config/*`) are tracked from before the gitignore rule. When source changes, **rebuild and commit the corresponding `plugin/` artifact** alongside the source change so `git diff` stays honest. The `prepublishOnly` hook also rebuilds before npm publish, so the published tarball is always correct regardless.
