@@ -55,6 +55,13 @@ export interface ContainerConfig {
   command?: string[]
   networkMode?: string
   resources?: ContainerResourceLimits
+  // signalk-container `user` field. Tells the runtime layer the
+  // image's USER directive UID/GID so it can emit the right uid-
+  // mapping flag (`--userns=keep-id:uid=X,gid=Y` on rootless podman,
+  // `--user X:Y` on docker/rootful). Default of `undefined` means
+  // signalk-container assumes inImageUid/Gid = 0, which is wrong for
+  // any non-root image like mayara (USER mayara, UID 1000).
+  user?: { inImageUid?: number; inImageGid?: number } | false
 }
 
 export interface ContainerInfo {

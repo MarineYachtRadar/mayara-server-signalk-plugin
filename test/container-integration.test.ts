@@ -398,6 +398,17 @@ describe('mayara-server-signalk-plugin container integration', () => {
       await plugin.stop()
     })
 
+    it('declares the mayara image in-image UID/GID for correct uid mapping', async () => {
+      // The mayara image runs as `mayara` (UID 1000). signalk-container
+      // defaults inImageUid to 0 when this field is omitted, which on
+      // rootless podman puts the container in the subuid range and
+      // breaks bind-mounted host files (notably the signalk-token).
+      const { containers, plugin } = await loadPlugin()
+      const { config } = containers._calls.ensureRunning[0]
+      expect(config.user).toEqual({ inImageUid: 1000, inImageGid: 1000 })
+      await plugin.stop()
+    })
+
     it('uses host network mode and unless-stopped restart policy', async () => {
       const { containers, plugin } = await loadPlugin()
       const { config } = containers._calls.ensureRunning[0]

@@ -325,7 +325,16 @@ module.exports = function (app) {
             networkMode: 'host',
             command,
             restart: 'unless-stopped',
-            resources: DEFAULT_RESOURCES
+            resources: DEFAULT_RESOURCES,
+            // The mayara image declares `USER mayara` with UID/GID 1000. Tell
+            // signalk-container so its UID-mapping logic emits the right flag
+            // (`--userns=keep-id:uid=1000,gid=1000` on rootless podman,
+            // `--user 1000:1000` on docker / rootful podman). Without this
+            // hint signalk-container assumes inImageUid=0, the in-image
+            // mayara user runs under the subuid range, and the bind-mounted
+            // signalk-token file (mode 0600 owned by the host SK user) is
+            // unreadable from inside the container.
+            user: { inImageUid: 1000, inImageGid: 1000 }
         };
         if (Object.keys(volumes).length > 0) {
             config.volumes = volumes;
