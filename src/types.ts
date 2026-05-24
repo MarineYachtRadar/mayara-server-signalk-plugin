@@ -157,6 +157,24 @@ export interface ContainerManagerApi {
   listContainers: () => Promise<ContainerInfo[]>
   updateResources: (name: string, limits: ContainerResourceLimits) => Promise<UpdateResourcesResult>
   getResources: (name: string) => ContainerResourceLimits
+  /**
+   * Translate an arbitrary in-SK absolute path into the `(source, subPath)`
+   * pair that a managed container's bind mount can reach on the host,
+   * regardless of how SignalK itself is deployed (bare-metal, Docker
+   * with a bind, Docker with a named volume, etc.).
+   *
+   * `source` plugs straight into `ContainerConfig.volumes` as the
+   * host-side mount source; `subPath` is the path inside that mount
+   * where `absPath` lives (empty string when the source already
+   * corresponds to absPath).
+   *
+   * Returns `null` when SignalK runs inside a container and no mount
+   * covers `absPath` — the host runtime physically cannot see it.
+   * Bare-metal callers always get a result. Available in
+   * signalk-container 1.1.0+ (peer-dep floor here is 1.6.0, so always
+   * present).
+   */
+  resolveHostPath: (absPath: string) => Promise<{ source: string; subPath: string } | null>
   updates: UpdateServiceApi
 }
 
