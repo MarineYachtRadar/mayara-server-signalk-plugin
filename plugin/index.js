@@ -4,10 +4,12 @@ const mayara_client_1 = require("./mayara-client");
 const radar_provider_1 = require("./radar-provider");
 const spoke_forwarder_1 = require("./spoke-forwarder");
 const schema_1 = require("./config/schema");
+const signalk_token_1 = require("./signalk-token");
 const MAYARA_IMAGE = 'ghcr.io/marineyachtradar/mayara-server';
 const CONTAINER_NAME = 'mayara-server';
 const PLUGIN_ID = 'mayara-server-signalk-plugin';
 const SAFE_TAG = /^[a-zA-Z0-9._-]+$/;
+const TOKEN_PATH_IN_CONTAINER = '/run/mayara/token';
 /**
  * Sensible default resource limits for the mayara-server container.
  * Tested on a Pi 5 8GB with a Garmin xHD2 radar at 24 NM range.
@@ -38,6 +40,8 @@ module.exports = function (app) {
     let currentSettings = null;
     const spokeForwarders = new Map();
     let discoveryInterval = null;
+    // Set true on stop() so the in-flight token poller exits its loop.
+    let tokenPollerCancelled = false;
     let reconnectInterval = null;
     let isConnected = false;
     const knownRadars = new Set();
@@ -54,12 +58,19 @@ module.exports = function (app) {
             // every field being present.
             const merged = { ...schema_1.SCHEMA_DEFAULTS, ...config };
             currentSettings = merged;
+            // Reset the poller cancel flag so a stop/start cycle (config
+            // change, plugin disable/enable) lets the next start make a
+            // fresh token request.
+            tokenPollerCancelled = false;
             void asyncStart(merged).catch((err) => {
                 app.setPluginError(`Startup failed: ${err instanceof Error ? err.message : String(err)}`);
             });
         },
         async stop() {
             app.debug('Stopping mayara-server-signalk-plugin');
+            // Tell any in-flight token poller to exit on its next tick so
+            // it doesn't keep the process alive after stop() returns.
+            tokenPollerCancelled = true;
             try {
                 app.radarApi.unRegister(PLUGIN_ID);
             }
@@ -269,24 +280,156 @@ module.exports = function (app) {
     // ==========================================================================
     /**
      * Build a ContainerConfig for the mayara-server container with the
-     * given tag. Used both at startup and when applying updates so the
-     * two paths can never drift on ports/volumes/env/resources.
+     * given tag. Used at startup, when applying updates, and after a
+     * background token mint completes — signalk-container drift-detects
+     * the resulting `command`/`volumes` changes and recreates the
+     * container transparently.
+     *
+     * Default nav-address is the upstream Signal K server itself:
+     *   - `ws:127.0.0.1:${SK_PORT}` plus `--signalk-token-file` when a
+     *     cached device token exists (full WS path → AIS REST seeding
+     *     works inside the container).
+     *   - `tcp:127.0.0.1:${TCPSTREAMPORT}` otherwise (legacy delta
+     *     stream; AIS overlay still works but only fills from live
+     *     deltas, not the initial REST snapshot).
+     *
+     * Either way, `mayaraArgs` may override `-n` entirely, in which case
+     * we don't inject our default or `--signalk-token-file`.
      */
     function buildContainerConfig(tag) {
         const userArgs = currentSettings?.mayaraArgs ?? [];
+        const userOverridesNav = userArgs.some((a) => a === '-n' || a === '--navigation-address');
+        const skPort = Number(process.env.PORT) || 3000;
         const tcpPort = Number(process.env.TCPSTREAMPORT) || 8375;
-        const navArg = userArgs.some((a) => a === '-n' || a === '--navigation-address')
-            ? []
-            : ['-n', `tcp:127.0.0.1:${tcpPort}`];
-        const command = ['mayara-server', ...navArg, ...userArgs];
-        return {
+        const dataDir = app.getDataDirPath();
+        const haveToken = (0, signalk_token_1.hasCachedToken)(dataDir);
+        const tokenFile = (0, signalk_token_1.tokenFilePath)(dataDir);
+        const injected = [];
+        const volumes = {};
+        if (!userOverridesNav) {
+            if (haveToken) {
+                injected.push('-n', `ws:127.0.0.1:${skPort}`, '--signalk-token-file', TOKEN_PATH_IN_CONTAINER);
+                // signalk-container volume shape: key = container path, value =
+                // host path. Mount the file (not a directory) so mayara only
+                // sees its token, not the whole data dir.
+                volumes[TOKEN_PATH_IN_CONTAINER] = tokenFile;
+            }
+            else {
+                injected.push('-n', `tcp:127.0.0.1:${tcpPort}`);
+            }
+        }
+        const command = ['mayara-server', ...injected, ...userArgs];
+        const config = {
             image: MAYARA_IMAGE,
             tag,
             networkMode: 'host',
             command,
             restart: 'unless-stopped',
-            resources: DEFAULT_RESOURCES
+            resources: DEFAULT_RESOURCES,
+            // The mayara image declares `USER mayara` with UID/GID 1000. Tell
+            // signalk-container so its UID-mapping logic emits the right flag
+            // (`--userns=keep-id:uid=1000,gid=1000` on rootless podman,
+            // `--user 1000:1000` on docker / rootful podman). Without this
+            // hint signalk-container assumes inImageUid=0, the in-image
+            // mayara user runs under the subuid range, and the bind-mounted
+            // signalk-token file (mode 0600 owned by the host SK user) is
+            // unreadable from inside the container.
+            user: { inImageUid: 1000, inImageGid: 1000 }
         };
+        if (Object.keys(volumes).length > 0) {
+            config.volumes = volumes;
+        }
+        return config;
+    }
+    /**
+     * Drive the Signal K device-access-request flow to obtain a token,
+     * then recreate the mayara container with the WS-based config so the
+     * AIS REST seeder can populate the in-radar overlay from the
+     * upstream `vessels/` snapshot.
+     *
+     * Fast path: a cached token already exists — log it and we're done
+     * (the container was already started with the correct config by
+     * `buildContainerConfig`).
+     *
+     * Slow path: POST a request, surface "Awaiting approval" plugin
+     * status, poll until admin approves (or denies, or stop() is
+     * called). On approval, write the token and re-call ensureRunning
+     * so signalk-container drift-detects the new `command`/`volumes`
+     * and recreates the container.
+     */
+    async function ensureSignalkToken(containers, tag) {
+        const dataDir = app.getDataDirPath();
+        if ((0, signalk_token_1.readCachedToken)(dataDir)) {
+            app.debug('Signal K token cached; container started with WS transport');
+            return;
+        }
+        const skPort = Number(process.env.PORT) || 3000;
+        // Request `readwrite` so mayara can later push deltas back into SK
+        // (radar targets, MARPA tracks, heading echoes, guard-zone
+        // notifications). Today the token only reads the AIS REST snapshot,
+        // but Signal K admin UI doesn't let the operator widen permissions
+        // post-approval — we'd have to revoke and re-request. Asking for
+        // the broader scope up front avoids that migration step when the
+        // writeback features land in mayara-server.
+        const begin = await (0, signalk_token_1.beginTokenRequest)({
+            dataDir,
+            signalkPort: skPort,
+            clientId: PLUGIN_ID,
+            description: 'MaYaRa Radar (Server) — AIS overlay seeding + radar/target/notification writebacks',
+            permissions: 'readwrite'
+        });
+        switch (begin.kind) {
+            case 'cached':
+                // Race: token landed between the readCachedToken above and the
+                // POST. Recreate to pick up WS transport.
+                await containers.ensureRunning(CONTAINER_NAME, buildContainerConfig(tag));
+                return;
+            case 'no-security':
+                app.debug('Signal K security disabled; no token needed');
+                // SK serves no-security WS without auth, so switch from tcp:
+                // to ws: by recreating with the same buildContainerConfig
+                // (which always emits ws: when haveToken is true, but here
+                // haveToken is false — fall back to tcp:, which still works).
+                return;
+            case 'requests-disabled':
+                app.setPluginStatus('Signal K device access requests are disabled. To enable the AIS ' +
+                    "overlay's initial REST snapshot, enable device access requests in " +
+                    'Security settings, or add `--signalk-token <token>` to mayaraArgs.');
+                return;
+            case 'error':
+                app.debug(`Signal K token request error: ${begin.message}`);
+                return;
+            case 'pending':
+                // Fall through to the polling block below.
+                break;
+        }
+        app.setPluginStatus('Awaiting Signal K token approval — see Security → Access Requests');
+        app.debug(`Awaiting approval at ${begin.href} (request ${begin.requestId}). ` +
+            `Set plugin config "requestSignalkToken" to false to suppress this.`);
+        const token = await (0, signalk_token_1.awaitApproval)(begin.href, skPort, () => tokenPollerCancelled, (msg) => {
+            app.debug(msg);
+        });
+        if (!token) {
+            // Denied, expired, or plugin stopped. Either way, leave the
+            // container on its existing transport; user can request again
+            // by restarting the plugin.
+            if (!tokenPollerCancelled) {
+                app.setPluginStatus('Signal K token request was denied or expired. AIS overlay will ' +
+                    'fill from live deltas only. Restart the plugin to request again.');
+            }
+            return;
+        }
+        (0, signalk_token_1.writeCachedToken)(dataDir, token);
+        app.debug('Signal K token approved and cached; recreating container with WS transport');
+        app.setPluginStatus('Signal K token approved — recreating container...');
+        try {
+            await containers.ensureRunning(CONTAINER_NAME, buildContainerConfig(tag));
+            app.setPluginStatus('Running');
+        }
+        catch (err) {
+            app.setPluginError(`Token approved but container recreate failed: ${errMsg(err)}. ` +
+                `Restart the plugin to retry.`);
+        }
     }
     /**
      * Wait up to `timeoutMs` for signalk-container to be both loaded
@@ -334,6 +477,16 @@ module.exports = function (app) {
         // and ports. Resources follow the live-update path. No local hash
         // tracking needed.
         await containers.ensureRunning(CONTAINER_NAME, config);
+        // Kick off Signal K device-token acquisition in the background. The
+        // container is already running with whatever transport the cached
+        // token (or lack thereof) selected; if we mint a new token here we
+        // recreate it later to switch transports. Failure paths only flip
+        // plugin status — they don't block startup.
+        if (settings.requestSignalkToken !== false) {
+            void ensureSignalkToken(containers, tag).catch((err) => {
+                app.debug(`Signal K token acquisition failed: ${errMsg(err)}`);
+            });
+        }
         // Register with the centralized update service. The service auto-
         // detects whether `tag` is a semver pin (compare via GitHub releases)
         // or a floating tag like `latest`/`main` (digest drift detection).

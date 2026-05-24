@@ -3,6 +3,7 @@ export declare const ConfigSchema: import("@sinclair/typebox").TObject<{
     managedContainer: import("@sinclair/typebox").TBoolean;
     mayaraVersion: import("@sinclair/typebox").TString;
     mayaraArgs: import("@sinclair/typebox").TArray<import("@sinclair/typebox").TString>;
+    requestSignalkToken: import("@sinclair/typebox").TBoolean;
     host: import("@sinclair/typebox").TString;
     port: import("@sinclair/typebox").TNumber;
     secure: import("@sinclair/typebox").TBoolean;
