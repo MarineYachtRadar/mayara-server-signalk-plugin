@@ -209,7 +209,7 @@ describe('signalk-token: awaitApproval', () => {
     )
     expect(token).toBe('approved-tok')
     expect(calls).toBeGreaterThanOrEqual(2)
-  }, 30_000)
+  })
 
   it('returns undefined when the admin denies (COMPLETED without a token)', async () => {
     globalThis.fetch = vi.fn(() =>
@@ -229,7 +229,7 @@ describe('signalk-token: awaitApproval', () => {
       5
     )
     expect(token).toBeUndefined()
-  }, 30_000)
+  })
 
   it('returns undefined when isCancelled becomes true mid-poll', async () => {
     let cancelled = false
@@ -247,7 +247,7 @@ describe('signalk-token: awaitApproval', () => {
       5
     )
     expect(token).toBeUndefined()
-  }, 30_000)
+  })
 
   it('resolves a relative href against http://127.0.0.1:port', async () => {
     const urls: string[] = []
@@ -269,5 +269,5 @@ describe('signalk-token: awaitApproval', () => {
       5
     )
     expect(urls[0]).toBe('http://127.0.0.1:4321/signalk/v1/requests/r')
-  }, 30_000)
+  })
 })

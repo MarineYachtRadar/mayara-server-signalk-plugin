@@ -20,12 +20,13 @@ exports.ConfigSchema = typebox_1.Type.Object({
     requestSignalkToken: typebox_1.Type.Boolean({
         default: true,
         title: 'Auto-request a Signal K device token for the radar overlay',
-        description: 'When Signal K security is enabled, the plugin requests a read-only ' +
+        description: 'When Signal K security is enabled, the plugin requests a read/write ' +
             'token from this server (visible as a pending request in Security → ' +
             'Access Requests). Approve it once and mayara will use the WebSocket ' +
-            'transport and full AIS overlay seeding. Disable to keep mayara on ' +
-            'the unauthenticated TCP delta stream (AIS overlay then fills only ' +
-            'from live deltas).'
+            'transport and full AIS overlay seeding. Read/write scope leaves room ' +
+            'for future radar/target/notification writebacks from mayara to Signal ' +
+            'K. Disable to keep mayara on the unauthenticated TCP delta stream ' +
+            '(AIS overlay then fills only from live deltas).'
     }),
     host: typebox_1.Type.String({
         default: 'localhost',

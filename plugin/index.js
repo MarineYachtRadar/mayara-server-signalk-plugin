@@ -355,12 +355,19 @@ module.exports = function (app) {
             return;
         }
         const skPort = Number(process.env.PORT) || 3000;
+        // Request `readwrite` so mayara can later push deltas back into SK
+        // (radar targets, MARPA tracks, heading echoes, guard-zone
+        // notifications). Today the token only reads the AIS REST snapshot,
+        // but Signal K admin UI doesn't let the operator widen permissions
+        // post-approval — we'd have to revoke and re-request. Asking for
+        // the broader scope up front avoids that migration step when the
+        // writeback features land in mayara-server.
         const begin = await (0, signalk_token_1.beginTokenRequest)({
             dataDir,
             signalkPort: skPort,
             clientId: PLUGIN_ID,
-            description: 'Mayara Radar (Server) — AIS overlay seeding',
-            permissions: 'readonly'
+            description: 'MaYaRa Radar (Server) — AIS overlay seeding + radar/target/notification writebacks',
+            permissions: 'readwrite'
         });
         switch (begin.kind) {
             case 'cached':

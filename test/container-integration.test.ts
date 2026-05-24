@@ -678,7 +678,10 @@ describe('mayara-server-signalk-plugin container integration', () => {
       expect(tokenModule.beginTokenRequest).toHaveBeenCalledTimes(1)
       const call = vi.mocked(tokenModule.beginTokenRequest).mock.calls[0][0]
       expect(call.clientId).toBe('mayara-server-signalk-plugin')
-      expect(call.permissions).toBe('readonly')
+      // Request `readwrite` so the cached token is broad enough for the
+      // future radar/target/notification writeback features; the operator
+      // approves once and we don't have to migrate later.
+      expect(call.permissions).toBe('readwrite')
       // The "awaiting approval" status should appear so users see the
       // pending request without having to grep the debug log.
       expect(app.setPluginStatus).toHaveBeenCalledWith(
