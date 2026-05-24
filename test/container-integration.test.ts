@@ -136,6 +136,10 @@ function makeMockContainerManager(): MockContainerManager {
     listContainers: vi.fn(() => Promise.resolve([])),
     updateResources: vi.fn(() => Promise.resolve({ method: 'live' as const })),
     getResources: vi.fn((): ContainerResourceLimits => ({})),
+    // Bare-metal-style resolver: source = the absolute path itself,
+    // subPath = "". Mirrors what real signalk-container does when SK
+    // is NOT containerized. SK-in-container tests can override per-call.
+    resolveHostPath: vi.fn((absPath: string) => Promise.resolve({ source: absPath, subPath: '' })),
     updates: {
       register: vi.fn((reg: UpdateRegistration) => {
         calls.updateRegistrations.push(reg)
@@ -639,10 +643,14 @@ describe('mayara-server-signalk-plugin container integration', () => {
       await plugin.stop()
     })
 
-    it('starts in ws: mode with --signalk-token-file when a token is cached', async () => {
+    it('starts in ws: mode with --signalk-token-file when a token is cached (bare-metal SK)', async () => {
+      // The default mock resolveHostPath returns { source: absPath,
+      // subPath: '' } — that mirrors bare-metal SK behavior. The mount
+      // is then a file mount, and `--signalk-token-file` points at
+      // the mount destination directly.
       const tokenModule = await loadTokenMock()
       vi.mocked(tokenModule.hasCachedToken).mockReturnValue(true)
-      vi.mocked(tokenModule.tokenFilePath).mockReturnValue('/tmp/host-token-file')
+      vi.mocked(tokenModule.tokenFilePath).mockReturnValue('/host/path/to/signalk-token')
 
       const { containers, plugin } = await loadPlugin({ requestSignalkToken: true })
       const { config } = containers._calls.ensureRunning[0]
@@ -650,9 +658,111 @@ describe('mayara-server-signalk-plugin container integration', () => {
       expect(command).toContain('--signalk-token-file')
       const navIdx = command.indexOf('-n')
       expect(command[navIdx + 1]).toMatch(/^ws:127\.0\.0\.1:\d+$/)
-      // Container path is the constant we picked; host path is whatever
-      // tokenFilePath returned for the data dir.
-      expect(config.volumes).toEqual({ '/run/mayara/token': '/tmp/host-token-file' })
+      // subPath is empty → mayara reads at the mount dir directly.
+      const tokenFileIdx = command.indexOf('--signalk-token-file')
+      expect(command[tokenFileIdx + 1]).toBe('/run/mayara')
+      // Volume key is the mount dir (TOKEN_DIR_IN_CONTAINER); value
+      // is the resolved host source (here = the abs token path,
+      // because resolveHostPath returned subPath="").
+      expect(config.volumes).toEqual({ '/run/mayara': '/host/path/to/signalk-token' })
+
+      vi.mocked(tokenModule.hasCachedToken).mockReturnValue(false)
+      await plugin.stop()
+    })
+
+    it('mounts the resolved host dir and uses subPath when SK is in a container', async () => {
+      // SK-in-container case: resolveHostPath inspects the SK
+      // container's mounts and returns the host-side dir backing the
+      // SK data tree, plus a relative subPath. The plugin must mount
+      // the whole dir at TOKEN_DIR_IN_CONTAINER and point mayara at
+      // the file via the subpath joined onto it.
+      const tokenModule = await loadTokenMock()
+      vi.mocked(tokenModule.hasCachedToken).mockReturnValue(true)
+      vi.mocked(tokenModule.tokenFilePath).mockReturnValue(
+        '/home/node/.signalk/plugin-config-data/mayara-server-signalk-plugin/signalk-token'
+      )
+
+      // Pre-seed the global container manager's resolveHostPath so the
+      // very first ensureRunning sees the SK-in-container shape.
+      const containers = makeMockContainerManager()
+      vi.mocked(containers.resolveHostPath).mockResolvedValue({
+        source: '/srv/signalk-data',
+        subPath: 'plugin-config-data/mayara-server-signalk-plugin/signalk-token'
+      })
+      globalThis.__signalk_containerManager = containers
+      const app = makeMockApp()
+      vi.resetModules()
+      const mod = (await import('../src/index')) as unknown as {
+        default: (a: unknown) => LoadedPlugin['plugin']
+      }
+      const plugin = mod.default(app)
+      plugin.registerWithRouter(makeRouter())
+      plugin.start({
+        managedContainer: true,
+        mayaraVersion: 'latest',
+        mayaraArgs: [],
+        requestSignalkToken: true,
+        host: 'localhost',
+        port: 6502,
+        secure: false,
+        discoveryPollInterval: 10,
+        reconnectInterval: 5
+      })
+      await new Promise<void>((resolve) => setTimeout(resolve, 50))
+
+      const { config } = containers._calls.ensureRunning[0]
+      // Volume key is the in-container mount dir; value is the host
+      // source from resolveHostPath.
+      expect(config.volumes).toEqual({ '/run/mayara': '/srv/signalk-data' })
+      // mayara reads the file at mount-dir + subPath, NOT the bare
+      // mount dir (because subPath is non-empty in this topology).
+      const command = config.command ?? []
+      const tokenFileIdx = command.indexOf('--signalk-token-file')
+      expect(command[tokenFileIdx + 1]).toBe(
+        '/run/mayara/plugin-config-data/mayara-server-signalk-plugin/signalk-token'
+      )
+
+      vi.mocked(tokenModule.hasCachedToken).mockReturnValue(false)
+      await plugin.stop()
+    })
+
+    it('falls back to tcp: with a plugin error when SK is containerized and the data dir has no host mount', async () => {
+      const tokenModule = await loadTokenMock()
+      vi.mocked(tokenModule.hasCachedToken).mockReturnValue(true)
+      vi.mocked(tokenModule.tokenFilePath).mockReturnValue('/in-container/path/signalk-token')
+
+      const containers = makeMockContainerManager()
+      vi.mocked(containers.resolveHostPath).mockResolvedValue(null)
+      globalThis.__signalk_containerManager = containers
+      const app = makeMockApp()
+      vi.resetModules()
+      const mod = (await import('../src/index')) as unknown as {
+        default: (a: unknown) => LoadedPlugin['plugin']
+      }
+      const plugin = mod.default(app)
+      plugin.registerWithRouter(makeRouter())
+      plugin.start({
+        managedContainer: true,
+        mayaraVersion: 'latest',
+        mayaraArgs: [],
+        requestSignalkToken: false,
+        host: 'localhost',
+        port: 6502,
+        secure: false,
+        discoveryPollInterval: 10,
+        reconnectInterval: 5
+      })
+      await new Promise<void>((resolve) => setTimeout(resolve, 50))
+
+      const { config } = containers._calls.ensureRunning[0]
+      const command = config.command ?? []
+      const navIdx = command.indexOf('-n')
+      expect(command[navIdx + 1]).toMatch(/^tcp:127\.0\.0\.1:\d+$/)
+      expect(command).not.toContain('--signalk-token-file')
+      expect(config.volumes).toBeUndefined()
+      expect(app.setPluginError).toHaveBeenCalledWith(
+        expect.stringContaining('not bind-mounted from the host')
+      )
 
       vi.mocked(tokenModule.hasCachedToken).mockReturnValue(false)
       await plugin.stop()
