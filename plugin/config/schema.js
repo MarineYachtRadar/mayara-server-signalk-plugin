@@ -17,6 +17,16 @@ exports.ConfigSchema = typebox_1.Type.Object({
         title: 'mayara-server arguments',
         description: 'e.g. ["--brand", "furuno", "--interface", "eth0"]'
     }),
+    requestSignalkToken: typebox_1.Type.Boolean({
+        default: true,
+        title: 'Auto-request a Signal K device token for the radar overlay',
+        description: 'When Signal K security is enabled, the plugin requests a read-only ' +
+            'token from this server (visible as a pending request in Security → ' +
+            'Access Requests). Approve it once and mayara will use the WebSocket ' +
+            'transport and full AIS overlay seeding. Disable to keep mayara on ' +
+            'the unauthenticated TCP delta stream (AIS overlay then fills only ' +
+            'from live deltas).'
+    }),
     host: typebox_1.Type.String({
         default: 'localhost',
         title: 'mayara-server host',
@@ -56,6 +66,7 @@ exports.SCHEMA_DEFAULTS = {
     managedContainer: true,
     mayaraVersion: 'latest',
     mayaraArgs: [],
+    requestSignalkToken: true,
     host: 'localhost',
     port: 6502,
     secure: false,

@@ -41,6 +41,25 @@ vi.mock('../src/spoke-forwarder', () => ({
   }))
 }))
 
+// Default-stub the token flow so tests that aren't specifically about
+// it don't issue stray HTTP requests against a non-existent local
+// Signal K server. Token-flow tests override per-call via vi.mocked().
+vi.mock('../src/signalk-token', async () => {
+  const actual =
+    await vi.importActual<typeof import('../src/signalk-token')>('../src/signalk-token')
+  return {
+    ...actual,
+    readCachedToken: vi.fn(() => undefined),
+    writeCachedToken: vi.fn(),
+    hasCachedToken: vi.fn(() => false),
+    tokenFilePath: vi.fn((dir: string) => `${dir}/signalk-token`),
+    beginTokenRequest: vi.fn(() =>
+      Promise.resolve({ kind: 'error' as const, message: 'stubbed in tests' })
+    ),
+    awaitApproval: vi.fn(() => Promise.resolve(undefined))
+  }
+})
+
 // =============================================================================
 // Test doubles for the signalk-container API
 // =============================================================================
@@ -287,6 +306,10 @@ async function loadPlugin(initialConfig: Record<string, unknown> = {}): Promise<
     managedContainer: true,
     mayaraVersion: 'latest',
     mayaraArgs: [],
+    // Tests that aren't specifically about the token flow opt out so
+    // they don't issue stray HTTP requests against a non-existent
+    // local Signal K server. Token-flow tests override to `true`.
+    requestSignalkToken: false,
     host: 'localhost',
     port: 6502,
     secure: false,
@@ -306,9 +329,26 @@ async function loadPlugin(initialConfig: Record<string, unknown> = {}): Promise<
 // Tests
 // =============================================================================
 
-beforeEach(() => {
+function loadTokenMock(): Promise<typeof import('../src/signalk-token')> {
+  return import('../src/signalk-token')
+}
+
+beforeEach(async () => {
   // Wipe the global between tests so they're isolated.
   delete (globalThis as { __signalk_containerManager?: unknown }).__signalk_containerManager
+  // Reset signalk-token mock state between tests so call counts and
+  // stubbed return values don't leak across the suite.
+  const tokenModule = await loadTokenMock()
+  vi.mocked(tokenModule.readCachedToken).mockReset().mockReturnValue(undefined)
+  vi.mocked(tokenModule.writeCachedToken).mockReset()
+  vi.mocked(tokenModule.hasCachedToken).mockReset().mockReturnValue(false)
+  vi.mocked(tokenModule.tokenFilePath)
+    .mockReset()
+    .mockImplementation((dir: string) => `${dir}/signalk-token`)
+  vi.mocked(tokenModule.beginTokenRequest)
+    .mockReset()
+    .mockResolvedValue({ kind: 'error', message: 'stubbed in tests' })
+  vi.mocked(tokenModule.awaitApproval).mockReset().mockResolvedValue(undefined)
 })
 
 afterEach(() => {
@@ -573,6 +613,137 @@ describe('mayara-server-signalk-plugin container integration', () => {
       expect(res.body).toEqual({ success: true, tag: 'v3.4.0' })
       // Should have logged an error to app.error explaining the situation
       expect(app.error).toHaveBeenCalled()
+      await plugin.stop()
+    })
+  })
+
+  describe('Signal K token integration', () => {
+    it('starts in tcp: mode when no token is cached and request flow is disabled', async () => {
+      const { containers, plugin } = await loadPlugin({ requestSignalkToken: false })
+      const { config } = containers._calls.ensureRunning[0]
+      expect(config.command?.[1]).toBe('-n')
+      expect(config.command?.[2]).toMatch(/^tcp:127\.0\.0\.1:\d+$/)
+      expect(config.command).not.toContain('--signalk-token-file')
+      expect(config.volumes).toBeUndefined()
+      await plugin.stop()
+    })
+
+    it('starts in ws: mode with --signalk-token-file when a token is cached', async () => {
+      const tokenModule = await loadTokenMock()
+      vi.mocked(tokenModule.hasCachedToken).mockReturnValue(true)
+      vi.mocked(tokenModule.tokenFilePath).mockReturnValue('/tmp/host-token-file')
+
+      const { containers, plugin } = await loadPlugin({ requestSignalkToken: true })
+      const { config } = containers._calls.ensureRunning[0]
+      const command = config.command ?? []
+      expect(command).toContain('--signalk-token-file')
+      const navIdx = command.indexOf('-n')
+      expect(command[navIdx + 1]).toMatch(/^ws:127\.0\.0\.1:\d+$/)
+      // Container path is the constant we picked; host path is whatever
+      // tokenFilePath returned for the data dir.
+      expect(config.volumes).toEqual({ '/run/mayara/token': '/tmp/host-token-file' })
+
+      vi.mocked(tokenModule.hasCachedToken).mockReturnValue(false)
+      await plugin.stop()
+    })
+
+    it('respects user-overridden -n by not injecting ws nor --signalk-token-file', async () => {
+      const tokenModule = await loadTokenMock()
+      vi.mocked(tokenModule.hasCachedToken).mockReturnValue(true)
+
+      const { containers, plugin } = await loadPlugin({
+        requestSignalkToken: true,
+        mayaraArgs: ['-n', 'tcp:0.0.0.0:9999']
+      })
+      const { config } = containers._calls.ensureRunning[0]
+      expect(config.command?.filter((a) => a === '-n').length).toBe(1)
+      expect(config.command).toContain('tcp:0.0.0.0:9999')
+      expect(config.command).not.toContain('--signalk-token-file')
+      expect(config.volumes).toBeUndefined()
+
+      vi.mocked(tokenModule.hasCachedToken).mockReturnValue(false)
+      await plugin.stop()
+    })
+
+    it('issues a beginTokenRequest when requestSignalkToken is true and no cache', async () => {
+      const tokenModule = await loadTokenMock()
+      vi.mocked(tokenModule.beginTokenRequest).mockResolvedValue({
+        kind: 'pending',
+        requestId: 'r-1',
+        href: '/signalk/v1/requests/r-1'
+      })
+
+      const { plugin, app } = await loadPlugin({ requestSignalkToken: true })
+
+      expect(tokenModule.beginTokenRequest).toHaveBeenCalledTimes(1)
+      const call = vi.mocked(tokenModule.beginTokenRequest).mock.calls[0][0]
+      expect(call.clientId).toBe('mayara-server-signalk-plugin')
+      expect(call.permissions).toBe('readonly')
+      // The "awaiting approval" status should appear so users see the
+      // pending request without having to grep the debug log.
+      expect(app.setPluginStatus).toHaveBeenCalledWith(
+        expect.stringContaining('Awaiting Signal K token approval')
+      )
+      await plugin.stop()
+    })
+
+    it('does NOT issue a beginTokenRequest when requestSignalkToken is false', async () => {
+      const tokenModule = await loadTokenMock()
+      vi.mocked(tokenModule.beginTokenRequest).mockClear()
+
+      const { plugin } = await loadPlugin({ requestSignalkToken: false })
+
+      expect(tokenModule.beginTokenRequest).not.toHaveBeenCalled()
+      await plugin.stop()
+    })
+
+    it('writes the token and recreates the container after admin approves', async () => {
+      const tokenModule = await loadTokenMock()
+      vi.mocked(tokenModule.beginTokenRequest).mockResolvedValue({
+        kind: 'pending',
+        requestId: 'r-1',
+        href: '/signalk/v1/requests/r-1'
+      })
+      vi.mocked(tokenModule.awaitApproval).mockResolvedValue('approved-jwt')
+      // After awaitApproval resolves, the plugin writes the token and
+      // re-calls ensureRunning. The second call should see hasCachedToken
+      // returning true so the new config uses ws:/--signalk-token-file.
+      let approved = false
+      vi.mocked(tokenModule.hasCachedToken).mockImplementation(() => approved)
+      vi.mocked(tokenModule.tokenFilePath).mockReturnValue('/tmp/host-token-file')
+      vi.mocked(tokenModule.writeCachedToken).mockImplementation(() => {
+        approved = true
+      })
+
+      const { plugin, containers } = await loadPlugin({ requestSignalkToken: true })
+
+      // Give the awaitApproval / writeCachedToken / ensureRunning chain
+      // time to settle. Same shape as the existing loadPlugin wait.
+      await new Promise<void>((resolve) => setTimeout(resolve, 100))
+
+      // Should have called writeCachedToken once with the approved token.
+      expect(tokenModule.writeCachedToken).toHaveBeenCalledWith(expect.any(String), 'approved-jwt')
+      // ensureRunning called twice: first with tcp config, then with ws
+      // config after the token landed.
+      expect(containers._calls.ensureRunning.length).toBeGreaterThanOrEqual(2)
+      const lastCall = containers._calls.ensureRunning[containers._calls.ensureRunning.length - 1]
+      expect(lastCall.config.command).toContain('--signalk-token-file')
+
+      vi.mocked(tokenModule.hasCachedToken).mockReturnValue(false)
+      await plugin.stop()
+    })
+
+    it('surfaces a status hint when device access requests are disabled', async () => {
+      const tokenModule = await loadTokenMock()
+      vi.mocked(tokenModule.beginTokenRequest).mockResolvedValue({
+        kind: 'requests-disabled'
+      })
+
+      const { plugin, app } = await loadPlugin({ requestSignalkToken: true })
+
+      expect(app.setPluginStatus).toHaveBeenCalledWith(
+        expect.stringContaining('device access requests are disabled')
+      )
       await plugin.stop()
     })
   })
