@@ -51,8 +51,6 @@ vi.mock('../src/signalk-token', async () => {
     ...actual,
     readCachedToken: vi.fn(() => undefined),
     writeCachedToken: vi.fn(),
-    hasCachedToken: vi.fn(() => false),
-    tokenFilePath: vi.fn((dir: string) => `${dir}/signalk-token`),
     beginTokenRequest: vi.fn(() =>
       Promise.resolve({ kind: 'error' as const, message: 'stubbed in tests' })
     ),
@@ -345,10 +343,6 @@ beforeEach(async () => {
   const tokenModule = await loadTokenMock()
   vi.mocked(tokenModule.readCachedToken).mockReset().mockReturnValue(undefined)
   vi.mocked(tokenModule.writeCachedToken).mockReset()
-  vi.mocked(tokenModule.hasCachedToken).mockReset().mockReturnValue(false)
-  vi.mocked(tokenModule.tokenFilePath)
-    .mockReset()
-    .mockImplementation((dir: string) => `${dir}/signalk-token`)
   vi.mocked(tokenModule.beginTokenRequest)
     .mockReset()
     .mockResolvedValue({ kind: 'error', message: 'stubbed in tests' })
@@ -404,9 +398,13 @@ describe('mayara-server-signalk-plugin container integration', () => {
 
     it('declares the mayara image in-image UID/GID for correct uid mapping', async () => {
       // The mayara image runs as `mayara` (UID 1000). signalk-container
-      // defaults inImageUid to 0 when this field is omitted, which on
-      // rootless podman puts the container in the subuid range and
-      // breaks bind-mounted host files (notably the signalk-token).
+      // defaults inImageUid to 0 when this field is omitted; without the
+      // explicit declaration the rootless-podman keep-id mapping would
+      // put the container in the subuid range, and on docker / rootful
+      // podman the in-container process would run under the SK host
+      // user's UID instead of the image's mayara user — either way,
+      // `/home/mayara/.local/share` (owned by uid 1000 inside the image)
+      // is unwritable and mayara fails to start.
       const { containers, plugin } = await loadPlugin()
       const { config } = containers._calls.ensureRunning[0]
       expect(config.user).toEqual({ inImageUid: 1000, inImageGid: 1000 })
@@ -639,138 +637,36 @@ describe('mayara-server-signalk-plugin container integration', () => {
       expect(config.command?.[1]).toBe('-n')
       expect(config.command?.[2]).toMatch(/^tcp:127\.0\.0\.1:\d+$/)
       expect(config.command).not.toContain('--signalk-token-file')
+      expect(config.env?.MAYARA_SIGNALK_TOKEN).toBeUndefined()
       expect(config.volumes).toBeUndefined()
       await plugin.stop()
     })
 
-    it('starts in ws: mode with --signalk-token-file when a token is cached (bare-metal SK)', async () => {
-      // The default mock resolveHostPath returns { source: absPath,
-      // subPath: '' } — that mirrors bare-metal SK behavior. The mount
-      // is then a file mount, and `--signalk-token-file` points at
-      // the mount destination directly.
+    it('starts in ws: mode with MAYARA_SIGNALK_TOKEN env var when a token is cached', async () => {
+      // The plugin delivers the token via env, not a bind-mounted
+      // file, so the in-container mayara user (uid 1000) can read it
+      // regardless of the host file's owner. No host-path resolution
+      // or bind-mount needed.
       const tokenModule = await loadTokenMock()
-      vi.mocked(tokenModule.hasCachedToken).mockReturnValue(true)
-      vi.mocked(tokenModule.tokenFilePath).mockReturnValue('/host/path/to/signalk-token')
+      vi.mocked(tokenModule.readCachedToken).mockReturnValue('cached-jwt-abc')
 
       const { containers, plugin } = await loadPlugin({ requestSignalkToken: true })
       const { config } = containers._calls.ensureRunning[0]
       const command = config.command ?? []
-      expect(command).toContain('--signalk-token-file')
+      expect(command).not.toContain('--signalk-token-file')
       const navIdx = command.indexOf('-n')
       expect(command[navIdx + 1]).toMatch(/^ws:127\.0\.0\.1:\d+$/)
-      // subPath is empty → mayara reads at the mount dir directly.
-      const tokenFileIdx = command.indexOf('--signalk-token-file')
-      expect(command[tokenFileIdx + 1]).toBe('/run/mayara')
-      // Volume key is the mount dir (TOKEN_DIR_IN_CONTAINER); value
-      // is the resolved host source (here = the abs token path,
-      // because resolveHostPath returned subPath="").
-      expect(config.volumes).toEqual({ '/run/mayara': '/host/path/to/signalk-token' })
-
-      vi.mocked(tokenModule.hasCachedToken).mockReturnValue(false)
-      await plugin.stop()
-    })
-
-    it('mounts the resolved host dir and uses subPath when SK is in a container', async () => {
-      // SK-in-container case: resolveHostPath inspects the SK
-      // container's mounts and returns the host-side dir backing the
-      // SK data tree, plus a relative subPath. The plugin must mount
-      // the whole dir at TOKEN_DIR_IN_CONTAINER and point mayara at
-      // the file via the subpath joined onto it.
-      const tokenModule = await loadTokenMock()
-      vi.mocked(tokenModule.hasCachedToken).mockReturnValue(true)
-      vi.mocked(tokenModule.tokenFilePath).mockReturnValue(
-        '/home/node/.signalk/plugin-config-data/mayara-server-signalk-plugin/signalk-token'
-      )
-
-      // Pre-seed the global container manager's resolveHostPath so the
-      // very first ensureRunning sees the SK-in-container shape.
-      const containers = makeMockContainerManager()
-      vi.mocked(containers.resolveHostPath).mockResolvedValue({
-        source: '/srv/signalk-data',
-        subPath: 'plugin-config-data/mayara-server-signalk-plugin/signalk-token'
-      })
-      globalThis.__signalk_containerManager = containers
-      const app = makeMockApp()
-      vi.resetModules()
-      const mod = (await import('../src/index')) as unknown as {
-        default: (a: unknown) => LoadedPlugin['plugin']
-      }
-      const plugin = mod.default(app)
-      plugin.registerWithRouter(makeRouter())
-      plugin.start({
-        managedContainer: true,
-        mayaraVersion: 'latest',
-        mayaraArgs: [],
-        requestSignalkToken: true,
-        host: 'localhost',
-        port: 6502,
-        secure: false,
-        discoveryPollInterval: 10,
-        reconnectInterval: 5
-      })
-      await new Promise<void>((resolve) => setTimeout(resolve, 50))
-
-      const { config } = containers._calls.ensureRunning[0]
-      // Volume key is the in-container mount dir; value is the host
-      // source from resolveHostPath.
-      expect(config.volumes).toEqual({ '/run/mayara': '/srv/signalk-data' })
-      // mayara reads the file at mount-dir + subPath, NOT the bare
-      // mount dir (because subPath is non-empty in this topology).
-      const command = config.command ?? []
-      const tokenFileIdx = command.indexOf('--signalk-token-file')
-      expect(command[tokenFileIdx + 1]).toBe(
-        '/run/mayara/plugin-config-data/mayara-server-signalk-plugin/signalk-token'
-      )
-
-      vi.mocked(tokenModule.hasCachedToken).mockReturnValue(false)
-      await plugin.stop()
-    })
-
-    it('falls back to tcp: with a plugin error when SK is containerized and the data dir has no host mount', async () => {
-      const tokenModule = await loadTokenMock()
-      vi.mocked(tokenModule.hasCachedToken).mockReturnValue(true)
-      vi.mocked(tokenModule.tokenFilePath).mockReturnValue('/in-container/path/signalk-token')
-
-      const containers = makeMockContainerManager()
-      vi.mocked(containers.resolveHostPath).mockResolvedValue(null)
-      globalThis.__signalk_containerManager = containers
-      const app = makeMockApp()
-      vi.resetModules()
-      const mod = (await import('../src/index')) as unknown as {
-        default: (a: unknown) => LoadedPlugin['plugin']
-      }
-      const plugin = mod.default(app)
-      plugin.registerWithRouter(makeRouter())
-      plugin.start({
-        managedContainer: true,
-        mayaraVersion: 'latest',
-        mayaraArgs: [],
-        requestSignalkToken: false,
-        host: 'localhost',
-        port: 6502,
-        secure: false,
-        discoveryPollInterval: 10,
-        reconnectInterval: 5
-      })
-      await new Promise<void>((resolve) => setTimeout(resolve, 50))
-
-      const { config } = containers._calls.ensureRunning[0]
-      const command = config.command ?? []
-      const navIdx = command.indexOf('-n')
-      expect(command[navIdx + 1]).toMatch(/^tcp:127\.0\.0\.1:\d+$/)
-      expect(command).not.toContain('--signalk-token-file')
+      expect(config.env).toEqual({ MAYARA_SIGNALK_TOKEN: 'cached-jwt-abc' })
+      // No bind mount needed for the token under env-var delivery.
       expect(config.volumes).toBeUndefined()
-      expect(app.setPluginError).toHaveBeenCalledWith(
-        expect.stringContaining('not bind-mounted from the host')
-      )
 
-      vi.mocked(tokenModule.hasCachedToken).mockReturnValue(false)
+      vi.mocked(tokenModule.readCachedToken).mockReturnValue(undefined)
       await plugin.stop()
     })
 
-    it('respects user-overridden -n by not injecting ws nor --signalk-token-file', async () => {
+    it('respects user-overridden -n by not injecting ws nor the token env var', async () => {
       const tokenModule = await loadTokenMock()
-      vi.mocked(tokenModule.hasCachedToken).mockReturnValue(true)
+      vi.mocked(tokenModule.readCachedToken).mockReturnValue('cached-jwt-abc')
 
       const { containers, plugin } = await loadPlugin({
         requestSignalkToken: true,
@@ -780,9 +676,14 @@ describe('mayara-server-signalk-plugin container integration', () => {
       expect(config.command?.filter((a) => a === '-n').length).toBe(1)
       expect(config.command).toContain('tcp:0.0.0.0:9999')
       expect(config.command).not.toContain('--signalk-token-file')
+      // User explicitly chose a transport; don't shadow it with our
+      // token env (mayara would still pick it up for the WS path if
+      // the user navigated back to ws:, but the operator's explicit
+      // override wins).
+      expect(config.env?.MAYARA_SIGNALK_TOKEN).toBeUndefined()
       expect(config.volumes).toBeUndefined()
 
-      vi.mocked(tokenModule.hasCachedToken).mockReturnValue(false)
+      vi.mocked(tokenModule.readCachedToken).mockReturnValue(undefined)
       await plugin.stop()
     })
 
@@ -830,13 +731,13 @@ describe('mayara-server-signalk-plugin container integration', () => {
       })
       vi.mocked(tokenModule.awaitApproval).mockResolvedValue('approved-jwt')
       // After awaitApproval resolves, the plugin writes the token and
-      // re-calls ensureRunning. The second call should see hasCachedToken
-      // returning true so the new config uses ws:/--signalk-token-file.
-      let approved = false
-      vi.mocked(tokenModule.hasCachedToken).mockImplementation(() => approved)
-      vi.mocked(tokenModule.tokenFilePath).mockReturnValue('/tmp/host-token-file')
-      vi.mocked(tokenModule.writeCachedToken).mockImplementation(() => {
-        approved = true
+      // re-calls ensureRunning. The second call's buildContainerConfig
+      // must see the cached token via readCachedToken so the new config
+      // delivers it via env + uses ws: transport.
+      let cached: string | undefined
+      vi.mocked(tokenModule.readCachedToken).mockImplementation(() => cached)
+      vi.mocked(tokenModule.writeCachedToken).mockImplementation((_dir, token) => {
+        cached = token
       })
 
       const { plugin, containers } = await loadPlugin({ requestSignalkToken: true })
@@ -847,13 +748,16 @@ describe('mayara-server-signalk-plugin container integration', () => {
 
       // Should have called writeCachedToken once with the approved token.
       expect(tokenModule.writeCachedToken).toHaveBeenCalledWith(expect.any(String), 'approved-jwt')
-      // ensureRunning called twice: first with tcp config, then with ws
-      // config after the token landed.
+      // ensureRunning called twice: first with tcp config (no token yet),
+      // then with ws config after the token landed.
       expect(containers._calls.ensureRunning.length).toBeGreaterThanOrEqual(2)
       const lastCall = containers._calls.ensureRunning[containers._calls.ensureRunning.length - 1]
-      expect(lastCall.config.command).toContain('--signalk-token-file')
+      expect(lastCall.config.env?.MAYARA_SIGNALK_TOKEN).toBe('approved-jwt')
+      const lastCmd = lastCall.config.command ?? []
+      const navIdx = lastCmd.indexOf('-n')
+      expect(lastCmd[navIdx + 1]).toMatch(/^ws:127\.0\.0\.1:\d+$/)
 
-      vi.mocked(tokenModule.hasCachedToken).mockReturnValue(false)
+      vi.mocked(tokenModule.readCachedToken).mockReturnValue(undefined)
       await plugin.stop()
     })
 

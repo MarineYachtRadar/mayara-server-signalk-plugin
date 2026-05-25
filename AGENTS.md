@@ -94,18 +94,20 @@ The flow lives in `src/signalk-token.ts` + `ensureSignalkToken()` in `src/index.
 
 1. On start, POST `/signalk/v1/access/requests` with `clientId = mayara-server-signalk-plugin` and `permissions: 'readwrite'`. The broad scope is deliberate — SK admin UI cannot widen permissions post-approval, only revoke + re-request, and mayara's roadmap includes pushing radar targets / MARPA tracks / notifications back to Signal K.
 2. Until the admin approves in **Security → Access Requests**, the container runs with `-n tcp:127.0.0.1:${TCPSTREAMPORT}` so nav deltas still flow.
-3. On approval, `awaitApproval()` extracts the JWT, caches it to `${app.getDataDirPath()}/signalk-token` (mode `0600`), and recreates the container with `-n ws:127.0.0.1:${PORT}` plus `--signalk-token-file /run/mayara/token` bind-mounted in.
-4. `requestSignalkToken: false` in plugin config opts out entirely (manual `--signalk-token-file` in `mayaraArgs` remains an escape hatch).
+3. On approval, `awaitApproval()` extracts the JWT, caches it to `${app.getDataDirPath()}/signalk-token` (mode `0600`, host-only), and recreates the container with `-n ws:127.0.0.1:${PORT}` plus `env.MAYARA_SIGNALK_TOKEN = <token>`. The token is delivered via env, not a bind-mounted file, because on docker / rootful podman signalk-container emits `--user 1000:1000` (the mayara image's USER) — and a 0600 file on the host owned by the SK process user would be unreadable from inside the container at that UID. Env vars cross the UID boundary unconditionally and `mayara-server` already accepts `MAYARA_SIGNALK_TOKEN` as an alternative to `--signalk-token-file` (see `mayara-server/src/lib/mod.rs:214-257`).
+4. `requestSignalkToken: false` in plugin config opts out entirely (manual `--signalk-token <token>` or `--signalk-token-file <path>` in `mayaraArgs` remains an escape hatch — and if the user passes `-n` in `mayaraArgs`, the plugin neither injects its default nor sets the token env, leaving the operator's config untouched).
 
 Token-flow tests live in `test/signalk-token.test.ts` (module-level: cache helpers, POST branches, polling) and `test/container-integration.test.ts` (integration: opt-in/out, lifecycle, recreate-on-approval). The token module is mocked by default in container-integration tests so they don't issue stray HTTP requests against a non-existent local SK; token-flow tests override per-test via `vi.mocked()`. The `tokenPollerCancelled` flag in `start()`/`stop()` keeps the poller from outliving the plugin.
 
 ### Container user UID mapping
 
-The mayara image declares `USER mayara` with UID/GID 1000. `buildContainerConfig` in `src/index.ts` declares `user: { inImageUid: 1000, inImageGid: 1000 }` so signalk-container emits the right uid-mapping flag — `--userns=keep-id:uid=1000,gid=1000` on rootless podman, `--user 1000:1000` on docker / rootful podman.
+The mayara image declares `USER mayara` with UID/GID 1000. `buildContainerConfig` in `src/index.ts` declares `user: { inImageUid: 1000, inImageGid: 1000 }` so signalk-container emits the right uid-mapping flag — `--userns=keep-id:uid=1000,gid=1000` on rootless podman, `--user 1000:1000` on docker / rootful podman (signalk-container ≥ the version that honors `inImageUid` on the docker/rootful branch).
 
-Without this, signalk-container defaults `inImageUid` to 0, the rootless-podman mapping puts the in-image UID 1000 at host UID `100999` (the subuid range), and the bind-mounted `signalk-token` file (mode `0600` owned by the SK server's host user) is unreadable from inside the container. The symptom is a crash-looping mayara container logging "Failed to install Signal K token: Permission denied".
+Without this, signalk-container defaults `inImageUid` to 0. On rootless podman the keep-id mapping puts the in-image UID 1000 at host UID `100999` (the subuid range); on docker / rootful podman the process runs as the SK host user's UID. Either way `/home/mayara/.local/share` (owned by uid 1000 inside the image) is unwritable and mayara fails to start.
 
-Test guard: "declares the mayara image in-image UID/GID for correct uid mapping" in `test/container-integration.test.ts`. Don't remove the `user` field from `buildContainerConfig` without first verifying that the bind-mount file ownership story still works on rootless podman.
+The token is delivered via the `MAYARA_SIGNALK_TOKEN` env var, not as a bind-mounted file, precisely so the in-container UID can differ from the host SK UID without breaking the upstream Signal K channel. See "Signal K device-token flow" above.
+
+Test guard: "declares the mayara image in-image UID/GID for correct uid mapping" in `test/container-integration.test.ts`. Don't remove the `user` field from `buildContainerConfig`; doing so silently regresses to whichever UID story the user's runtime defaults to.
 
 ### Build artifacts in `plugin/`
 
