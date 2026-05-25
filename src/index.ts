@@ -1,6 +1,5 @@
 import { Plugin } from '@signalk/server-api'
 import { Request, Response, IRouter } from 'express'
-import * as path from 'path'
 import { MayaraClient } from './mayara-client'
 import { createRadarProvider } from './radar-provider'
 import { SpokeForwarder } from './spoke-forwarder'
@@ -14,9 +13,7 @@ import { ConfigSchema, Config, SCHEMA_DEFAULTS } from './config/schema'
 import {
   awaitApproval,
   beginTokenRequest,
-  hasCachedToken,
   readCachedToken,
-  tokenFilePath,
   writeCachedToken
 } from './signalk-token'
 
@@ -24,12 +21,6 @@ const MAYARA_IMAGE = 'ghcr.io/marineyachtradar/mayara-server'
 const CONTAINER_NAME = 'mayara-server'
 const PLUGIN_ID = 'mayara-server-signalk-plugin'
 const SAFE_TAG = /^[a-zA-Z0-9._-]+$/
-// Where mayara reads the token file inside its container. The plugin
-// bind-mounts its plugin-config-data directory (containing the
-// `signalk-token` file) at TOKEN_DIR_IN_CONTAINER; the file then
-// appears at TOKEN_DIR_IN_CONTAINER + the relative subpath returned
-// by `containers.resolveHostPath()`.
-const TOKEN_DIR_IN_CONTAINER = '/run/mayara'
 
 /**
  * Sensible default resource limits for the mayara-server container.
@@ -241,10 +232,7 @@ module.exports = function (app: MayaraServerAPI): Plugin {
           // ID and config are gone. Surface a clear error so the user knows
           // they need to retry the apply rather than seeing a generic 500.
           try {
-            await containers.ensureRunning(
-              CONTAINER_NAME,
-              await buildContainerConfig(containers, tag)
-            )
+            await containers.ensureRunning(CONTAINER_NAME, buildContainerConfig(tag))
           } catch (recreateErr) {
             const msg = `Container removed but recreation failed: ${errMsg(recreateErr)}. Click Update again to retry.`
             app.setPluginError(msg)
@@ -337,73 +325,47 @@ module.exports = function (app: MayaraServerAPI): Plugin {
    * Build a ContainerConfig for the mayara-server container with the
    * given tag. Used at startup, when applying updates, and after a
    * background token mint completes — signalk-container drift-detects
-   * the resulting `command`/`volumes` changes and recreates the
-   * container transparently.
+   * the resulting `command`/`env` changes and recreates the container
+   * transparently.
    *
    * Default nav-address is the upstream Signal K server itself:
-   *   - `ws:127.0.0.1:${SK_PORT}` plus `--signalk-token-file` when a
-   *     cached device token exists (full WS path → AIS REST seeding
-   *     works inside the container).
+   *   - `ws:127.0.0.1:${SK_PORT}` plus `MAYARA_SIGNALK_TOKEN` env var
+   *     when a cached device token exists (full WS path → AIS REST
+   *     seeding works inside the container).
    *   - `tcp:127.0.0.1:${TCPSTREAMPORT}` otherwise (legacy delta
    *     stream; AIS overlay still works but only fills from live
    *     deltas, not the initial REST snapshot).
    *
    * Either way, `mayaraArgs` may override `-n` entirely, in which case
-   * we don't inject our default or `--signalk-token-file`.
+   * we don't inject our default — and we also drop the token env so
+   * the operator's explicit config isn't shadowed.
+   *
+   * The token is delivered via env, not as a bind-mounted file, because
+   * on Docker (and rootful podman) signalk-container emits `--user
+   * 1000:1000` so the in-container mayara user can write its own home —
+   * but that means the in-container UID (1000) differs from the host
+   * caller's UID and a bind-mounted 0600 token written by the host SK
+   * user would be unreadable from inside the container. Env vars cross
+   * the UID boundary unconditionally. The on-disk cache file under
+   * `${dataDir}/signalk-token` (mode 0600) stays as the plugin's own
+   * cache so the token survives SK restarts.
    */
-  async function buildContainerConfig(
-    containers: ContainerManagerApi,
-    tag: string
-  ): Promise<ContainerConfig> {
+  function buildContainerConfig(tag: string): ContainerConfig {
     const userArgs = currentSettings?.mayaraArgs ?? []
     const userOverridesNav = userArgs.some((a) => a === '-n' || a === '--navigation-address')
 
     const skPort = Number(process.env.PORT) || 3000
     const tcpPort = Number(process.env.TCPSTREAMPORT) || 8375
     const dataDir = app.getDataDirPath()
-    const haveToken = hasCachedToken(dataDir)
+    const cachedToken = userOverridesNav ? undefined : readCachedToken(dataDir)
 
     const injected: string[] = []
-    const volumes: Record<string, string> = {}
+    const env: Record<string, string> = {}
 
     if (!userOverridesNav) {
-      if (haveToken) {
-        // Translate the in-SK absolute token path into the host-side
-        // (source, subPath) pair signalk-container's bind mount can
-        // actually reach. Critical when SK runs inside a container —
-        // `app.getDataDirPath()` returns a path inside that container,
-        // not on the host where podman/docker actually lives. On
-        // bare-metal SK the resolver returns the path unchanged.
-        const tokenAbsPath = tokenFilePath(dataDir)
-        const resolved = await containers.resolveHostPath(tokenAbsPath)
-        if (resolved !== null) {
-          // Mount the resolved source (typically the plugin's own
-          // data dir, since SK gives each plugin a private subtree)
-          // and tell mayara where to find the token file inside it.
-          // `subPath` is relative to `source`; when source already
-          // equals tokenAbsPath, subPath is "" (file mount).
-          const tokenPathInContainer = path.posix.join(TOKEN_DIR_IN_CONTAINER, resolved.subPath)
-          injected.push(
-            '-n',
-            `ws:127.0.0.1:${skPort}`,
-            '--signalk-token-file',
-            tokenPathInContainer
-          )
-          volumes[TOKEN_DIR_IN_CONTAINER] = resolved.source
-        } else {
-          // SK is containerized and no host mount covers the token
-          // path. Fall back to TCP rather than fail startup; surface
-          // the gap so the operator knows AIS REST seeding won't
-          // happen until they fix the mount.
-          app.setPluginError(
-            'Signal K token cached but the data directory is not bind-mounted ' +
-              'from the host — managed mayara container cannot read it. ' +
-              'Falling back to anonymous TCP transport (AIS overlay fills ' +
-              'from live deltas only). Bind-mount your SK data directory ' +
-              'into the SK container to enable WS+token mode.'
-          )
-          injected.push('-n', `tcp:127.0.0.1:${tcpPort}`)
-        }
+      if (cachedToken !== undefined) {
+        injected.push('-n', `ws:127.0.0.1:${skPort}`)
+        env.MAYARA_SIGNALK_TOKEN = cachedToken
       } else {
         injected.push('-n', `tcp:127.0.0.1:${tcpPort}`)
       }
@@ -423,13 +385,12 @@ module.exports = function (app: MayaraServerAPI): Plugin {
       // (`--userns=keep-id:uid=1000,gid=1000` on rootless podman,
       // `--user 1000:1000` on docker / rootful podman). Without this
       // hint signalk-container assumes inImageUid=0, the in-image
-      // mayara user runs under the subuid range, and the bind-mounted
-      // signalk-token file (mode 0600 owned by the host SK user) is
-      // unreadable from inside the container.
+      // mayara user runs under the subuid range, and the in-container
+      // mayara process cannot write to `/home/mayara/.local/share`.
       user: { inImageUid: 1000, inImageGid: 1000 }
     }
-    if (Object.keys(volumes).length > 0) {
-      config.volumes = volumes
+    if (Object.keys(env).length > 0) {
+      config.env = env
     }
     return config
   }
@@ -447,8 +408,8 @@ module.exports = function (app: MayaraServerAPI): Plugin {
    * Slow path: POST a request, surface "Awaiting approval" plugin
    * status, poll until admin approves (or denies, or stop() is
    * called). On approval, write the token and re-call ensureRunning
-   * so signalk-container drift-detects the new `command`/`volumes`
-   * and recreates the container.
+   * so signalk-container drift-detects the new `command`/`env` and
+   * recreates the container.
    */
   async function ensureSignalkToken(containers: ContainerManagerApi, tag: string): Promise<void> {
     const dataDir = app.getDataDirPath()
@@ -478,7 +439,7 @@ module.exports = function (app: MayaraServerAPI): Plugin {
       case 'cached':
         // Race: token landed between the readCachedToken above and the
         // POST. Recreate to pick up WS transport.
-        await containers.ensureRunning(CONTAINER_NAME, await buildContainerConfig(containers, tag))
+        await containers.ensureRunning(CONTAINER_NAME, buildContainerConfig(tag))
         return
       case 'no-security':
         app.debug('Signal K security disabled; no token needed')
@@ -533,7 +494,7 @@ module.exports = function (app: MayaraServerAPI): Plugin {
     app.debug('Signal K token approved and cached; recreating container with WS transport')
     app.setPluginStatus('Signal K token approved — recreating container...')
     try {
-      await containers.ensureRunning(CONTAINER_NAME, await buildContainerConfig(containers, tag))
+      await containers.ensureRunning(CONTAINER_NAME, buildContainerConfig(tag))
       app.setPluginStatus('Running')
     } catch (err) {
       app.setPluginError(
@@ -590,7 +551,7 @@ module.exports = function (app: MayaraServerAPI): Plugin {
     app.setPluginStatus('Starting mayara-server container...')
 
     const tag = settings.mayaraVersion ?? 'latest'
-    const config = await buildContainerConfig(containers, tag)
+    const config = buildContainerConfig(tag)
 
     // signalk-container ≥1.6.0 diffs ContainerConfig against the live
     // container on every ensureRunning call and recreates transparently
