@@ -97,6 +97,15 @@ class MayaraClient {
         const wsProtocol = this.secure ? 'wss' : 'ws';
         return `${wsProtocol}://${this.host}:${this.port}${API_BASE}/${radarId}/targets/stream`;
     }
+    /**
+     * Signal K v1 stream — the same WebSocket the built-in GUI subscribes
+     * to. Used by NotificationForwarder to listen for `notifications.*`
+     * deltas (e.g. guard-zone alarms) and republish them upstream.
+     */
+    getStateStreamUrl() {
+        const wsProtocol = this.secure ? 'wss' : 'ws';
+        return `${wsProtocol}://${this.host}:${this.port}/signalk/v1/stream`;
+    }
     close() {
         // No persistent connections to close for HTTP client
     }

@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const mayara_client_1 = require("./mayara-client");
 const radar_provider_1 = require("./radar-provider");
 const spoke_forwarder_1 = require("./spoke-forwarder");
+const notification_forwarder_1 = require("./notification-forwarder");
 const schema_1 = require("./config/schema");
 const signalk_token_1 = require("./signalk-token");
 const MAYARA_IMAGE = 'ghcr.io/marineyachtradar/mayara-server';
@@ -38,6 +39,10 @@ module.exports = function (app) {
     let client = null;
     let currentSettings = null;
     const spokeForwarders = new Map();
+    // Single instance: mayara emits notifications on the server-wide v1
+    // stream, not per-radar, so we only need one connection regardless of
+    // how many radars are discovered.
+    let notificationForwarder = null;
     let discoveryInterval = null;
     // Set true on stop() so the in-flight token poller exits its loop.
     let tokenPollerCancelled = false;
@@ -89,6 +94,10 @@ module.exports = function (app) {
             }
             spokeForwarders.clear();
             knownRadars.clear();
+            if (notificationForwarder) {
+                notificationForwarder.stop();
+                notificationForwarder = null;
+            }
             if (client) {
                 client.close();
                 client = null;
@@ -148,6 +157,9 @@ module.exports = function (app) {
                         radarId: id,
                         connected: spokeForwarders.get(id)?.isConnected() ?? false
                     })),
+                    notificationForwarder: {
+                        connected: notificationForwarder?.isConnected() ?? false
+                    },
                     container: {
                         state: containerState,
                         image: containerImage,
@@ -551,6 +563,19 @@ module.exports = function (app) {
                     await new Promise((resolve) => setTimeout(resolve, 1000));
                 }
             }
+        }
+        // Bring up the notification forwarder before discovery so the very
+        // first guard-zone alarm a radar fires reaches the upstream Signal
+        // K server. The forwarder owns its own reconnect loop, so failing
+        // here just means it'll reach mayara on a later attempt.
+        if (!notificationForwarder) {
+            notificationForwarder = new notification_forwarder_1.NotificationForwarder(app, {
+                pluginId: PLUGIN_ID,
+                url: client.getStateStreamUrl(),
+                debug: app.debug.bind(app),
+                reconnectInterval: (settings.reconnectInterval || 5) * 1000
+            });
+            notificationForwarder.start();
         }
         await connectAndDiscover(settings);
     }

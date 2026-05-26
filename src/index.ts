@@ -3,6 +3,7 @@ import { Request, Response, IRouter } from 'express'
 import { MayaraClient } from './mayara-client'
 import { createRadarProvider } from './radar-provider'
 import { SpokeForwarder } from './spoke-forwarder'
+import { NotificationForwarder } from './notification-forwarder'
 import {
   ContainerConfig,
   ContainerManagerApi,
@@ -53,6 +54,10 @@ module.exports = function (app: MayaraServerAPI): Plugin {
   let client: MayaraClient | null = null
   let currentSettings: Partial<Config> | null = null
   const spokeForwarders = new Map<string, SpokeForwarder>()
+  // Single instance: mayara emits notifications on the server-wide v1
+  // stream, not per-radar, so we only need one connection regardless of
+  // how many radars are discovered.
+  let notificationForwarder: NotificationForwarder | null = null
   let discoveryInterval: ReturnType<typeof setInterval> | null = null
   // Set true on stop() so the in-flight token poller exits its loop.
   let tokenPollerCancelled = false
@@ -111,6 +116,11 @@ module.exports = function (app: MayaraServerAPI): Plugin {
       }
       spokeForwarders.clear()
       knownRadars.clear()
+
+      if (notificationForwarder) {
+        notificationForwarder.stop()
+        notificationForwarder = null
+      }
 
       if (client) {
         client.close()
@@ -173,6 +183,9 @@ module.exports = function (app: MayaraServerAPI): Plugin {
             radarId: id,
             connected: spokeForwarders.get(id)?.isConnected() ?? false
           })),
+          notificationForwarder: {
+            connected: notificationForwarder?.isConnected() ?? false
+          },
           container: {
             state: containerState,
             image: containerImage,
@@ -634,6 +647,20 @@ module.exports = function (app: MayaraServerAPI): Plugin {
           await new Promise<void>((resolve) => setTimeout(resolve, 1000))
         }
       }
+    }
+
+    // Bring up the notification forwarder before discovery so the very
+    // first guard-zone alarm a radar fires reaches the upstream Signal
+    // K server. The forwarder owns its own reconnect loop, so failing
+    // here just means it'll reach mayara on a later attempt.
+    if (!notificationForwarder) {
+      notificationForwarder = new NotificationForwarder(app, {
+        pluginId: PLUGIN_ID,
+        url: client.getStateStreamUrl(),
+        debug: app.debug.bind(app),
+        reconnectInterval: (settings.reconnectInterval || 5) * 1000
+      })
+      notificationForwarder.start()
     }
 
     await connectAndDiscover(settings)
