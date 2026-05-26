@@ -403,7 +403,7 @@ describe('mayara-server-signalk-plugin container integration', () => {
       // put the container in the subuid range, and on docker / rootful
       // podman the in-container process would run under the SK host
       // user's UID instead of the image's mayara user — either way,
-      // `/home/mayara/.local/share` (owned by uid 1000 inside the image)
+      // the in-image XDG data dir (owned by uid 1000 inside the image)
       // is unwritable and mayara fails to start.
       const { containers, plugin } = await loadPlugin()
       const { config } = containers._calls.ensureRunning[0]

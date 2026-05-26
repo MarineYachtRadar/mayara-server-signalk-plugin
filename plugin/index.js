@@ -350,7 +350,7 @@ module.exports = function (app) {
             // `--user 1000:1000` on docker / rootful podman). Without this
             // hint signalk-container assumes inImageUid=0, the in-image
             // mayara user runs under the subuid range, and the in-container
-            // mayara process cannot write to `/home/mayara/.local/share`.
+            // mayara process cannot write to the in-image XDG data dir.
             user: { inImageUid: 1000, inImageGid: 1000 }
         };
         if (Object.keys(env).length > 0) {
