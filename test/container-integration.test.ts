@@ -220,6 +220,10 @@ interface CapturedRouter {
   routes: Map<string, Handler>
   get(path: string, handler: Handler): void
   post(path: string, handler: Handler): void
+  // The plugin mounts a reverse-proxy middleware via `router.use('/gui', ...)`.
+  // Tests don't exercise the proxy itself; a no-op stub is enough to satisfy
+  // `registerWithRouter()` without bringing in a real Express router.
+  use(path: string, middleware: unknown): void
 }
 
 function makeRouter(): CapturedRouter {
@@ -231,6 +235,9 @@ function makeRouter(): CapturedRouter {
     },
     post: (path: string, h: Handler) => {
       routes.set(`POST ${path}`, h)
+    },
+    use: () => {
+      /* no-op: proxy mount isn't exercised by these tests */
     }
   }
 }
