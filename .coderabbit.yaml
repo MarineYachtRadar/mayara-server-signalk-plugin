@@ -283,14 +283,6 @@ reviews:
         `NODE_AUTH_TOKEN`, `NPM_TOKEN`, or `secrets.NPM_TOKEN` to
         `publish.yml`.
 
-        ## No pull_request trigger on signalk-ci.yml
-        `signalk-ci.yml` is intentionally on `push` to main and
-        `workflow_dispatch` only — there is no `pull_request:`
-        trigger. Reviewers dispatch it manually on a PR branch via
-        `gh workflow run signalk-ci.yml --ref <branch>`. Flag any PR
-        that adds a `pull_request` trigger to that workflow without
-        an explicit operator-facing reason in the description.
-
         ## Publish fires on v* tag
         `publish.yml` fires on `v*` tag push. It creates a GitHub
         Release with auto-generated notes (one line per PR since the
