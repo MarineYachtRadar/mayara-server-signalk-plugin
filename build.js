@@ -31,7 +31,10 @@ function main() {
   }
   fs.copyFileSync(logoSrc, logoDest)
 
-  // Create redirect page
+  // Create redirect page. The target is a same-origin path served by
+  // the plugin's reverse proxy in src/index.ts, so the browser stays
+  // on the SK server's host/port (3000 or 443). Works identically over
+  // HTTP and HTTPS; only the SK port needs to be open externally.
   fs.writeFileSync(
     path.join(publicDest, 'index.html'),
     `<!DOCTYPE html>
@@ -40,19 +43,7 @@ function main() {
   <meta charset="utf-8">
   <title>MaYaRa Radar</title>
   <script>
-    fetch('/plugins/mayara-server-signalk-plugin/api/gui-url')
-      .then(r => r.json())
-      .then(data => {
-        // Replace localhost/127.0.0.1 with browser's hostname (for managed containers)
-        const url = new URL(data.url);
-        if (url.hostname === 'localhost' || url.hostname === '127.0.0.1') {
-          url.hostname = window.location.hostname;
-        }
-        window.location.href = url.href;
-      })
-      .catch(() => {
-        document.getElementById('msg').textContent = 'mayara-server not reachable. Check plugin configuration.';
-      });
+    window.location.replace('/plugins/mayara-server-signalk-plugin/gui/');
   </script>
   <style>
     body { font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #111; color: #ccc; }
@@ -63,7 +54,7 @@ function main() {
 <body>
   <div class="box">
     <img src="assets/mayara_logo.png" alt="MaYaRa">
-    <p id="msg">Redirecting to mayara-server...</p>
+    <p id="msg">Opening radar UI...</p>
   </div>
 </body>
 </html>

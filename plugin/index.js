@@ -1,5 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const http_1 = require("http");
+const http_proxy_middleware_1 = require("http-proxy-middleware");
 const mayara_client_1 = require("./mayara-client");
 const radar_provider_1 = require("./radar-provider");
 const spoke_forwarder_1 = require("./spoke-forwarder");
@@ -10,6 +12,10 @@ const MAYARA_IMAGE = 'ghcr.io/marineyachtradar/mayara-server';
 const CONTAINER_NAME = 'mayara-server';
 const PLUGIN_ID = 'mayara-server-signalk-plugin';
 const SAFE_TAG = /^[a-zA-Z0-9._-]+$/;
+// Same-origin path the SK server forwards to mayara-server's :6502.
+// Keeps the browser on the SK port (3000 / 443), so HTTPS works and
+// only one firewall port needs to be open.
+const GUI_PROXY_PATH = `/plugins/${PLUGIN_ID}/gui`;
 /**
  * Sensible default resource limits for the mayara-server container.
  * Tested on a Pi 5 8GB with a Garmin xHD2 radar at 24 NM range.
@@ -49,6 +55,12 @@ module.exports = function (app) {
     let reconnectInterval = null;
     let isConnected = false;
     const knownRadars = new Set();
+    // Track the WebSocket upgrade listener so stop() can detach it.
+    // The HTTP server outlives plugin restarts (disable/enable, config
+    // saves), so leaving the listener registered would accumulate one
+    // per restart cycle and cause duplicate proxy.upgrade() calls.
+    let upgradeListener = null;
+    let upgradeListenerServer = null;
     const plugin = {
         id: PLUGIN_ID,
         name: 'MaYaRa Radar (Server)',
@@ -120,10 +132,143 @@ module.exports = function (app) {
                     app.debug(`Error stopping mayara-server container: ${errMsg(err)}`);
                 }
             }
+            if (upgradeListener && upgradeListenerServer) {
+                upgradeListenerServer.removeListener('upgrade', upgradeListener);
+                upgradeListener = null;
+                upgradeListenerServer = null;
+            }
             isConnected = false;
             app.setPluginStatus('Stopped');
         },
         registerWithRouter(router) {
+            // Same-origin reverse proxy to mayara-server's :6502. The icon
+            // click in the SK admin lands on the splash page (public/
+            // index.html), which redirects to `${GUI_PROXY_PATH}/`. From
+            // there the browser only ever talks to the SK server, so HTTPS
+            // works without mixed content and only the SK port needs to be
+            // open externally.
+            //
+            // `router` flag rewriter resolves the target on every request,
+            // so changes to host/port in the plugin config take effect
+            // without restarting the plugin (matches the live read in
+            // /api/gui-url).
+            // Rewrite the absolute `ws://host:port/...` URLs mayara puts in
+            // its radar-list JSON to same-origin paths the browser can reach
+            // via this proxy. control.js opens `new WebSocket(streamUrl)` on
+            // the value verbatim, so without this the GUI would try to talk
+            // directly to mayara's port (defeating the whole point).
+            const rewriteStreamUrl = (raw) => {
+                try {
+                    const u = new URL(raw);
+                    // Map mayara's /signalk/... paths to /plugins/<id>/gui/signalk/...
+                    // (the `/gui` mount is where ws-upgrade dispatch hooks in).
+                    return `${GUI_PROXY_PATH}${u.pathname}${u.search}`;
+                }
+                catch {
+                    return raw;
+                }
+            };
+            const guiProxy = (0, http_proxy_middleware_1.createProxyMiddleware)({
+                router: () => {
+                    const host = currentSettings?.host ?? 'localhost';
+                    const port = currentSettings?.port ?? 6502;
+                    const proto = currentSettings?.secure ? 'https' : 'http';
+                    return `${proto}://${host}:${port}`;
+                },
+                // `router.use('/gui', guiProxy)` strips the `/gui` prefix
+                // before the middleware sees the request, so the proxy
+                // receives paths like `/` (for the GUI root) and
+                // `/signalk/v2/api/...` (for the WebSocket-emitting REST API).
+                // mayara-server serves its UI at `/gui/...` but its API +
+                // WebSockets at `/signalk/...`. We need both classes of
+                // request to reach mayara, so prepend `/gui` ONLY for paths
+                // that aren't already `/signalk/...`.
+                target: 'http://localhost:6502', // overridden by `router`
+                changeOrigin: true,
+                ws: true,
+                xfwd: true,
+                followRedirects: false,
+                pathRewrite: (path) => (path.startsWith('/signalk/') ? path : `/gui${path}`),
+                selfHandleResponse: true,
+                on: {
+                    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- responseInterceptor returns a function whose Promise return value is awaited by node-http-proxy internally.
+                    proxyRes: (0, http_proxy_middleware_1.responseInterceptor)((buffer, proxyRes, req) => {
+                        const ct = proxyRes.headers['content-type'] ?? '';
+                        // Only the radar-list JSON contains stream URLs we need
+                        // to rewrite. Everything else (HTML, JS, CSS, binary
+                        // images, other JSON) passes through untouched.
+                        if (ct.includes('application/json') &&
+                            req.url?.includes('/signalk/v2/api/vessels/self/radars')) {
+                            try {
+                                const json = JSON.parse(buffer.toString('utf8'));
+                                for (const radar of Object.values(json)) {
+                                    if (radar.streamUrl)
+                                        radar.streamUrl = rewriteStreamUrl(radar.streamUrl);
+                                    if (radar.spokeDataUrl)
+                                        radar.spokeDataUrl = rewriteStreamUrl(radar.spokeDataUrl);
+                                }
+                                return Promise.resolve(JSON.stringify(json));
+                            }
+                            catch {
+                                return Promise.resolve(buffer);
+                            }
+                        }
+                        return Promise.resolve(buffer);
+                    })
+                }
+            });
+            // WebSocket upgrades fire at the Node HTTP-server level, not
+            // through Express, so we need an `upgrade` listener on the
+            // server itself. The server isn't exposed through the documented
+            // Plugin API — but every incoming Express request reaches it via
+            // `req.socket.server`, which is Node's public HTTP API. Wrap the
+            // proxy with a one-shot middleware that captures the server on
+            // the first request and installs a path-filtered upgrade handler.
+            // Other plugins / SK itself add their own upgrade listeners for
+            // their own paths; they coexist because each returns early on
+            // non-matching URLs.
+            // Install the WS upgrade listener as soon as any HTTP request
+            // hits the plugin router. WebSocket upgrades fire at the Node
+            // HTTP-server level (not through Express), and the documented
+            // Plugin API doesn't expose the server. Every incoming Express
+            // request reaches it via `req.socket.server` (Node's public
+            // HTTP API), so we grab it on first hit and register a
+            // path-filtered upgrade handler. The handler reference is
+            // stored in module scope so stop() can detach it on plugin
+            // restart.
+            router.use((req, _res, next) => {
+                if (!upgradeListener) {
+                    // Express types `req.socket` as net.Socket, but at runtime
+                    // it's an http.Socket with a `.server` back-reference to
+                    // the Node HTTP server. That's the only documented public
+                    // path to reach the server from a plugin (app.server is
+                    // SK-internal and flagged by the upstream plugin-CI lint).
+                    const httpServer = req.socket.server;
+                    if (httpServer instanceof http_1.Server) {
+                        const prefix = `${GUI_PROXY_PATH}/`;
+                        upgradeListener = (upReq, socket, head) => {
+                            if (upReq.url && upReq.url.startsWith(prefix)) {
+                                // Strip the `/plugins/<id>/gui` prefix so the proxy
+                                // sees the same path shape as for HTTP requests
+                                // (where Express' router.use('/gui', ...) does the
+                                // stripping). pathRewrite then handles the
+                                // `/signalk/` vs `/gui/...` split uniformly.
+                                const stripped = upReq.url.slice(GUI_PROXY_PATH.length) || '/';
+                                upReq.url = stripped;
+                                guiProxy.upgrade(upReq, socket, head);
+                            }
+                        };
+                        httpServer.on('upgrade', upgradeListener);
+                        upgradeListenerServer = httpServer;
+                        app.debug(`Mounted mayara GUI proxy at ${GUI_PROXY_PATH} (with WS upgrade)`);
+                    }
+                    else {
+                        app.debug('HTTP server unavailable on req.socket; WS streams to mayara GUI will not be proxied');
+                    }
+                }
+                next();
+            });
+            router.use('/gui', guiProxy);
             router.get('/status', async (_req, res) => {
                 const containers = getContainerManager();
                 let containerState = 'unknown';
@@ -255,10 +400,7 @@ module.exports = function (app) {
                 }
             });
             router.get('/api/gui-url', (_req, res) => {
-                const host = currentSettings?.host ?? 'localhost';
-                const port = currentSettings?.port ?? 6502;
-                const proto = currentSettings?.secure ? 'https' : 'http';
-                res.json({ url: `${proto}://${host}:${port}/gui/` });
+                res.json({ url: `${GUI_PROXY_PATH}/` });
             });
             // Lists available release tags for the version dropdown in the
             // config panel. signalk-container's update service exposes "what
