@@ -62,7 +62,7 @@ No `Co-Authored-By` lines. No "Generated with Claude Code" attribution.
 
 ## CI / publishing
 
-- **Plugin CI** (`.github/workflows/signalk-ci.yml`) calls the upstream `SignalK/signalk-server` reusable workflow. It runs on push to `main` and `workflow_dispatch` only — **there is no `pull_request` trigger**. To check CI on a PR branch, dispatch it manually: `gh workflow run signalk-ci.yml --ref <branch>`.
+- **Plugin CI** (`.github/workflows/signalk-ci.yml`) calls the upstream `SignalK/signalk-server` reusable workflow. It runs on push to `main`, on pull_request to `main`, and on `workflow_dispatch`. PR runs surface as checks on the PR itself; the push-to-main run still covers post-merge verification.
 - **Publish** (`.github/workflows/publish.yml`) fires on `v*` tag push. It creates a GitHub Release with auto-generated notes (one line per PR since the previous tag), then `npm publish`es via OIDC trusted publishing.
 - **No `NPM_TOKEN` secret exists or is needed.** Trusted publishing is configured on npm; do not add `NODE_AUTH_TOKEN` to the workflow.
 
