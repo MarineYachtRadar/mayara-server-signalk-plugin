@@ -218,26 +218,32 @@ type Handler = (req: unknown, res: unknown) => void | Promise<void>
 
 interface CapturedRouter {
   routes: Map<string, Handler>
+  mounts: string[]
   get(path: string, handler: Handler): void
   post(path: string, handler: Handler): void
   // The plugin mounts a reverse-proxy middleware via `router.use('/gui', ...)`.
-  // Tests don't exercise the proxy itself; a no-op stub is enough to satisfy
-  // `registerWithRouter()` without bringing in a real Express router.
+  // Capture the mount path so tests can assert the proxy is registered;
+  // tests don't exercise the proxy behavior itself.
   use(path: string, middleware: unknown): void
 }
 
 function makeRouter(): CapturedRouter {
   const routes = new Map<string, Handler>()
+  const mounts: string[] = []
   return {
     routes,
+    mounts,
     get: (path: string, h: Handler) => {
       routes.set(`GET ${path}`, h)
     },
     post: (path: string, h: Handler) => {
       routes.set(`POST ${path}`, h)
     },
-    use: () => {
-      /* no-op: proxy mount isn't exercised by these tests */
+    // Note: `middleware` is intentionally not captured; the mock only
+    // needs to record the mount path. The ESLint argsIgnorePattern in
+    // this repo is `^$` so a `_middleware` placeholder would lint-error.
+    use: (path: string) => {
+      mounts.push(path)
     }
   }
 }
@@ -779,6 +785,17 @@ describe('mayara-server-signalk-plugin container integration', () => {
       expect(app.setPluginStatus).toHaveBeenCalledWith(
         expect.stringContaining('device access requests are disabled')
       )
+      await plugin.stop()
+    })
+  })
+
+  describe('GUI reverse proxy mount', () => {
+    it('mounts the mayara GUI proxy at /gui via router.use', async () => {
+      // Regression guard: without this mount, clicking the radar icon
+      // in the SK admin would fall back to opening mayara's :6502
+      // directly, breaking single-port and SSL deployments.
+      const { router, plugin } = await loadPlugin()
+      expect(router.mounts).toContain('/gui')
       await plugin.stop()
     })
   })

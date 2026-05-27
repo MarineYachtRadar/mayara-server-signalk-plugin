@@ -1,6 +1,6 @@
 import { Plugin } from '@signalk/server-api'
 import { Request, Response, IRouter } from 'express'
-import type { IncomingMessage, Server as HttpServer } from 'http'
+import { Server as HttpServer, type IncomingMessage } from 'http'
 import type { Socket } from 'net'
 import {
   createProxyMiddleware,
@@ -75,6 +75,12 @@ module.exports = function (app: MayaraServerAPI): Plugin {
   let reconnectInterval: ReturnType<typeof setInterval> | null = null
   let isConnected = false
   const knownRadars = new Set<string>()
+  // Track the WebSocket upgrade listener so stop() can detach it.
+  // The HTTP server outlives plugin restarts (disable/enable, config
+  // saves), so leaving the listener registered would accumulate one
+  // per restart cycle and cause duplicate proxy.upgrade() calls.
+  let upgradeListener: ((req: IncomingMessage, socket: Socket, head: Buffer) => void) | null = null
+  let upgradeListenerServer: HttpServer | null = null
 
   const plugin: Plugin = {
     id: PLUGIN_ID,
@@ -155,6 +161,12 @@ module.exports = function (app: MayaraServerAPI): Plugin {
         }
       }
 
+      if (upgradeListener && upgradeListenerServer) {
+        upgradeListenerServer.removeListener('upgrade', upgradeListener)
+        upgradeListener = null
+        upgradeListenerServer = null
+      }
+
       isConnected = false
       app.setPluginStatus('Stopped')
     },
@@ -211,18 +223,14 @@ module.exports = function (app: MayaraServerAPI): Plugin {
         selfHandleResponse: true,
         on: {
           // eslint-disable-next-line @typescript-eslint/no-misused-promises -- responseInterceptor returns a function whose Promise return value is awaited by node-http-proxy internally.
-          proxyRes: responseInterceptor((buffer, proxyRes) => {
+          proxyRes: responseInterceptor((buffer, proxyRes, req) => {
             const ct = proxyRes.headers['content-type'] ?? ''
-            // `proxyRes.req` is the outbound ClientRequest set by
-            // node-http-proxy; it's present at runtime but not in
-            // IncomingMessage's public type.
-            const proxyReq = (proxyRes as unknown as { req?: { path?: string } }).req
             // Only the radar-list JSON contains stream URLs we need
             // to rewrite. Everything else (HTML, JS, CSS, binary
             // images, other JSON) passes through untouched.
             if (
               ct.includes('application/json') &&
-              proxyReq?.path?.includes('/signalk/v2/api/vessels/self/radars')
+              req.url?.includes('/signalk/v2/api/vessels/self/radars')
             ) {
               try {
                 const json = JSON.parse(buffer.toString('utf8')) as Record<
@@ -242,37 +250,60 @@ module.exports = function (app: MayaraServerAPI): Plugin {
           })
         }
       })
-      router.use('/gui', guiProxy)
 
-      // WebSocket upgrades aren't dispatched by Express; they fire at
-      // the HTTP server level. Attach a path-filtered upgrade listener
-      // once. Other plugins / SK itself add their own upgrade handlers
-      // for their own paths — they coexist because each returns early
-      // on non-matching URLs.
-      const httpServer = (app as unknown as { server?: HttpServer }).server
-      if (httpServer) {
-        const prefix = `${GUI_PROXY_PATH}/`
-        httpServer.on('upgrade', (req: IncomingMessage, socket, head: Buffer) => {
-          if (req.url && req.url.startsWith(prefix)) {
-            // The Node http.Server upgrade event types the stream as
-            // Duplex (the base class), but at runtime it's always a
-            // net.Socket — which is what http-proxy-middleware.upgrade
-            // expects. Narrow with a cast.
-            //
-            // Strip the `/plugins/<id>/gui` prefix so the proxy
-            // middleware sees the same path shape it sees for HTTP
-            // requests (where Express' router.use('/gui', ...) does
-            // the stripping). pathRewrite then handles the
-            // `/signalk/` vs `/gui/...` split uniformly.
-            const stripped = req.url.slice(GUI_PROXY_PATH.length) || '/'
-            req.url = stripped
-            guiProxy.upgrade(req, socket as Socket, head)
+      // WebSocket upgrades fire at the Node HTTP-server level, not
+      // through Express, so we need an `upgrade` listener on the
+      // server itself. The server isn't exposed through the documented
+      // Plugin API — but every incoming Express request reaches it via
+      // `req.socket.server`, which is Node's public HTTP API. Wrap the
+      // proxy with a one-shot middleware that captures the server on
+      // the first request and installs a path-filtered upgrade handler.
+      // Other plugins / SK itself add their own upgrade listeners for
+      // their own paths; they coexist because each returns early on
+      // non-matching URLs.
+      // Install the WS upgrade listener as soon as any HTTP request
+      // hits the plugin router. WebSocket upgrades fire at the Node
+      // HTTP-server level (not through Express), and the documented
+      // Plugin API doesn't expose the server. Every incoming Express
+      // request reaches it via `req.socket.server` (Node's public
+      // HTTP API), so we grab it on first hit and register a
+      // path-filtered upgrade handler. The handler reference is
+      // stored in module scope so stop() can detach it on plugin
+      // restart.
+      router.use((req: Request, _res: Response, next) => {
+        if (!upgradeListener) {
+          // Express types `req.socket` as net.Socket, but at runtime
+          // it's an http.Socket with a `.server` back-reference to
+          // the Node HTTP server. That's the only documented public
+          // path to reach the server from a plugin (app.server is
+          // SK-internal and flagged by the upstream plugin-CI lint).
+          const httpServer = (req.socket as Socket & { server?: HttpServer }).server
+          if (httpServer instanceof HttpServer) {
+            const prefix = `${GUI_PROXY_PATH}/`
+            upgradeListener = (upReq: IncomingMessage, socket: Socket, head: Buffer) => {
+              if (upReq.url && upReq.url.startsWith(prefix)) {
+                // Strip the `/plugins/<id>/gui` prefix so the proxy
+                // sees the same path shape as for HTTP requests
+                // (where Express' router.use('/gui', ...) does the
+                // stripping). pathRewrite then handles the
+                // `/signalk/` vs `/gui/...` split uniformly.
+                const stripped = upReq.url.slice(GUI_PROXY_PATH.length) || '/'
+                upReq.url = stripped
+                guiProxy.upgrade(upReq, socket, head)
+              }
+            }
+            httpServer.on('upgrade', upgradeListener)
+            upgradeListenerServer = httpServer
+            app.debug(`Mounted mayara GUI proxy at ${GUI_PROXY_PATH} (with WS upgrade)`)
+          } else {
+            app.debug(
+              'HTTP server unavailable on req.socket; WS streams to mayara GUI will not be proxied'
+            )
           }
-        })
-        app.debug(`Mounted mayara GUI proxy at ${GUI_PROXY_PATH} (with WS upgrade)`)
-      } else {
-        app.debug(`app.server unavailable; WebSocket streams to mayara GUI will not be proxied`)
-      }
+        }
+        next()
+      })
+      router.use('/gui', guiProxy)
 
       router.get('/status', async (_req: Request, res: Response) => {
         const containers = getContainerManager()
