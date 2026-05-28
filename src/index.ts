@@ -211,9 +211,10 @@ module.exports = function (app: MayaraServerAPI): Plugin {
         // receives paths like `/` (for the GUI root) and
         // `/signalk/v2/api/...` (for the WebSocket-emitting REST API).
         // mayara-server serves its UI at `/gui/...` but its API +
-        // WebSockets at `/signalk/...`. We need both classes of
-        // request to reach mayara, so prepend `/gui` ONLY for paths
-        // that aren't already `/signalk/...`.
+        // WebSockets at `/signalk/...` (and the bare `/signalk`
+        // discovery endpoint the GUI probes for mode detection). We
+        // need both classes of request to reach mayara, so prepend
+        // `/gui` ONLY for paths that aren't already under `/signalk`.
         target: 'http://localhost:6502', // overridden by `router`
         changeOrigin: true,
         // Do NOT let the middleware auto-subscribe to the server's `upgrade`
@@ -227,7 +228,8 @@ module.exports = function (app: MayaraServerAPI): Plugin {
         ws: false,
         xfwd: true,
         followRedirects: false,
-        pathRewrite: (path) => (path.startsWith('/signalk/') ? path : `/gui${path}`),
+        pathRewrite: (path) =>
+          path === '/signalk' || path.startsWith('/signalk/') ? path : `/gui${path}`,
         selfHandleResponse: true,
         on: {
           // eslint-disable-next-line @typescript-eslint/no-misused-promises -- responseInterceptor returns a function whose Promise return value is awaited by node-http-proxy internally.
