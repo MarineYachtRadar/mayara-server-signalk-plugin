@@ -1,7 +1,7 @@
 import { Plugin } from '@signalk/server-api'
 import { Request, Response, IRouter } from 'express'
-import { Server as HttpServer, type IncomingMessage } from 'http'
-import type { Socket } from 'net'
+import { type IncomingMessage } from 'http'
+import { Server as NetServer, type Socket } from 'net'
 import {
   createProxyMiddleware,
   responseInterceptor,
@@ -80,7 +80,7 @@ module.exports = function (app: MayaraServerAPI): Plugin {
   // saves), so leaving the listener registered would accumulate one
   // per restart cycle and cause duplicate proxy.upgrade() calls.
   let upgradeListener: ((req: IncomingMessage, socket: Socket, head: Buffer) => void) | null = null
-  let upgradeListenerServer: HttpServer | null = null
+  let upgradeListenerServer: NetServer | null = null
 
   const plugin: Plugin = {
     id: PLUGIN_ID,
@@ -216,7 +216,15 @@ module.exports = function (app: MayaraServerAPI): Plugin {
         // that aren't already `/signalk/...`.
         target: 'http://localhost:6502', // overridden by `router`
         changeOrigin: true,
-        ws: true,
+        // Do NOT let the middleware auto-subscribe to the server's `upgrade`
+        // event. It would see the raw `/plugins/<id>/gui/signalk/...` URL,
+        // which `pathRewrite` can't strip the mount prefix from (it only
+        // knows `/signalk/` vs not), so the upgrade reaches mayara at a bogus
+        // `/gui/...` path and 404s. The manual `upgradeListener` below strips
+        // the prefix first, then calls `guiProxy.upgrade()`. With `ws: true`
+        // that manual call is a no-op (it guards on `wsInternalSubscribed`),
+        // so the two handlers fight and the wrong one wins. Keep this false.
+        ws: false,
         xfwd: true,
         followRedirects: false,
         pathRewrite: (path) => (path.startsWith('/signalk/') ? path : `/gui${path}`),
@@ -272,13 +280,17 @@ module.exports = function (app: MayaraServerAPI): Plugin {
       // restart.
       router.use((req: Request, _res: Response, next) => {
         if (!upgradeListener) {
-          // Express types `req.socket` as net.Socket, but at runtime
-          // it's an http.Socket with a `.server` back-reference to
-          // the Node HTTP server. That's the only documented public
-          // path to reach the server from a plugin (app.server is
-          // SK-internal and flagged by the upstream plugin-CI lint).
-          const httpServer = (req.socket as Socket & { server?: HttpServer }).server
-          if (httpServer instanceof HttpServer) {
+          // Express types `req.socket` as net.Socket, but at runtime it has
+          // a `.server` back-reference to the Node server. Match on
+          // `net.Server` (the common base) rather than `http.Server`: with
+          // SSL enabled, Signal K's listener is an `https.Server`, which
+          // extends `tls.Server`/`net.Server` — NOT `http.Server` — so an
+          // `instanceof http.Server` check fails and the WS upgrade listener
+          // is never installed (streams hang under https). `app.server` is
+          // SK-internal and flagged by the upstream plugin-CI lint, so this
+          // back-reference is the only documented public path to the server.
+          const wsServer = (req.socket as Socket & { server?: NetServer }).server
+          if (wsServer instanceof NetServer) {
             const prefix = `${GUI_PROXY_PATH}/`
             upgradeListener = (upReq: IncomingMessage, socket: Socket, head: Buffer) => {
               if (upReq.url && upReq.url.startsWith(prefix)) {
@@ -292,8 +304,8 @@ module.exports = function (app: MayaraServerAPI): Plugin {
                 guiProxy.upgrade(upReq, socket, head)
               }
             }
-            httpServer.on('upgrade', upgradeListener)
-            upgradeListenerServer = httpServer
+            wsServer.on('upgrade', upgradeListener)
+            upgradeListenerServer = wsServer
             app.debug(`Mounted mayara GUI proxy at ${GUI_PROXY_PATH} (with WS upgrade)`)
           } else {
             app.debug(

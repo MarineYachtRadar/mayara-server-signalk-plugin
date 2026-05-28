@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-const http_1 = require("http");
+const net_1 = require("net");
 const http_proxy_middleware_1 = require("http-proxy-middleware");
 const mayara_client_1 = require("./mayara-client");
 const radar_provider_1 = require("./radar-provider");
@@ -185,7 +185,15 @@ module.exports = function (app) {
                 // that aren't already `/signalk/...`.
                 target: 'http://localhost:6502', // overridden by `router`
                 changeOrigin: true,
-                ws: true,
+                // Do NOT let the middleware auto-subscribe to the server's `upgrade`
+                // event. It would see the raw `/plugins/<id>/gui/signalk/...` URL,
+                // which `pathRewrite` can't strip the mount prefix from (it only
+                // knows `/signalk/` vs not), so the upgrade reaches mayara at a bogus
+                // `/gui/...` path and 404s. The manual `upgradeListener` below strips
+                // the prefix first, then calls `guiProxy.upgrade()`. With `ws: true`
+                // that manual call is a no-op (it guards on `wsInternalSubscribed`),
+                // so the two handlers fight and the wrong one wins. Keep this false.
+                ws: false,
                 xfwd: true,
                 followRedirects: false,
                 pathRewrite: (path) => (path.startsWith('/signalk/') ? path : `/gui${path}`),
@@ -238,13 +246,17 @@ module.exports = function (app) {
             // restart.
             router.use((req, _res, next) => {
                 if (!upgradeListener) {
-                    // Express types `req.socket` as net.Socket, but at runtime
-                    // it's an http.Socket with a `.server` back-reference to
-                    // the Node HTTP server. That's the only documented public
-                    // path to reach the server from a plugin (app.server is
-                    // SK-internal and flagged by the upstream plugin-CI lint).
-                    const httpServer = req.socket.server;
-                    if (httpServer instanceof http_1.Server) {
+                    // Express types `req.socket` as net.Socket, but at runtime it has
+                    // a `.server` back-reference to the Node server. Match on
+                    // `net.Server` (the common base) rather than `http.Server`: with
+                    // SSL enabled, Signal K's listener is an `https.Server`, which
+                    // extends `tls.Server`/`net.Server` — NOT `http.Server` — so an
+                    // `instanceof http.Server` check fails and the WS upgrade listener
+                    // is never installed (streams hang under https). `app.server` is
+                    // SK-internal and flagged by the upstream plugin-CI lint, so this
+                    // back-reference is the only documented public path to the server.
+                    const wsServer = req.socket.server;
+                    if (wsServer instanceof net_1.Server) {
                         const prefix = `${GUI_PROXY_PATH}/`;
                         upgradeListener = (upReq, socket, head) => {
                             if (upReq.url && upReq.url.startsWith(prefix)) {
@@ -258,8 +270,8 @@ module.exports = function (app) {
                                 guiProxy.upgrade(upReq, socket, head);
                             }
                         };
-                        httpServer.on('upgrade', upgradeListener);
-                        upgradeListenerServer = httpServer;
+                        wsServer.on('upgrade', upgradeListener);
+                        upgradeListenerServer = wsServer;
                         app.debug(`Mounted mayara GUI proxy at ${GUI_PROXY_PATH} (with WS upgrade)`);
                     }
                     else {
