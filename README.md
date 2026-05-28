@@ -132,7 +132,11 @@ Set **Managed container** to off to connect to a mayara-server instance running 
 
 ### Radar Display
 
-The webapp redirects to mayara-server's built-in GUI at `http://<host>:6502/gui/`.
+The webapp opens mayara-server's built-in GUI proxied through the Signal K
+server at `/plugins/mayara-server-signalk-plugin/gui/`, so only the Signal K
+port needs to be reachable — mayara-server's own port (6502) does not have to
+be exposed. The proxy forwards the GUI's REST calls and its radar/state/spoke
+WebSocket streams to mayara-server, over both HTTP and HTTPS.
 
 ## Features
 

@@ -117,6 +117,15 @@ Test guard: "declares the mayara image in-image UID/GID for correct uid mapping"
 
 `src/index.ts` passes `DEFAULT_RESOURCES` to signalk-container's `ensureRunning`. Users can field-level-override any limit via signalk-container's plugin config (`containerOverrides["mayara-server"]`). When changing defaults, also update the README table at the bottom of the "Resource Limits" section.
 
+### GUI proxy WebSocket forwarding
+
+The mayara GUI is proxied through Signal K at `/plugins/<id>/gui/` so only the SK port needs to be open. The GUI's REST calls go through Express' `router.use('/gui', guiProxy)`, but its radar/state/spoke **WebSocket** upgrades fire at the Node HTTP-server level, so `registerWithRouter` installs a manual `upgrade` listener on `req.socket.server`. Two non-obvious traps live here:
+
+- **Match the server on `net.Server`, not `http.Server`.** With SSL enabled, Signal K's listener is an `https.Server`, which extends `tls.Server`/`net.Server` — **not** `http.Server`. An `instanceof http.Server` check silently fails under HTTPS, the listener is never installed, and every `wss://` upgrade hangs (radar display stuck on "Disconnected"). HTTP works, HTTPS doesn't — a classic SSL-only regression.
+- **Keep `ws: false` on `createProxyMiddleware`.** With `ws: true`, the middleware auto-subscribes its *own* upgrade handler to the server and the manual `guiProxy.upgrade()` call becomes a no-op (it guards on `wsInternalSubscribed`). The auto-handler sees the raw `/plugins/<id>/gui/signalk/...` URL, which `pathRewrite` can't strip the mount prefix from, so the upgrade reaches mayara at a bogus `/gui/...` path and 404s. The manual listener strips the prefix first, so it must be the one that runs.
+
+`pathRewrite` passes anything under `/signalk` (including the bare `/signalk` discovery path the GUI probes for mode detection) straight through; everything else gets `/gui` prepended for the static asset server.
+
 ## Dependencies
 
 - Signal K Server ≥ 2.24.0 (Radar API requirement)
