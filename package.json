@@ -48,7 +48,7 @@
   },
   "dependencies": {
     "@sinclair/typebox": "^0.34.0",
-    "http-proxy-middleware": "^3.0.5",
+    "http-proxy-middleware": "^4.0.0",
     "ws": "^8.14.0"
   },
   "peerDependencies": {
