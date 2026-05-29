@@ -52,7 +52,7 @@
     "ws": "^8.14.0"
   },
   "peerDependencies": {
-    "signalk-container": ">=1.6.0"
+    "signalk-container": ">=1.9.0"
   },
   "peerDependenciesMeta": {
     "signalk-container": {

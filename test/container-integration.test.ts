@@ -424,6 +424,21 @@ describe('mayara-server-signalk-plugin container integration', () => {
       await plugin.stop()
     })
 
+    it('opts into floating-tag auto-update in buildContainerConfig', async () => {
+      // Without autoUpdateOnFloatingTag, a boat that started on
+      // `:latest` six months ago keeps the cached image forever — the
+      // image+tag string match in ensureRunning short-circuits before
+      // any digest probe. Setting it true delegates pull + digest
+      // compare + recreate-on-drift to signalk-container (≥1.9.0),
+      // which silently skips the check on offline errors so boats
+      // out of cell coverage still boot. Semver-pinned users are
+      // unaffected because the floating-tag classifier skips them.
+      const { containers, plugin } = await loadPlugin()
+      const { config } = containers._calls.ensureRunning[0]
+      expect(config.autoUpdateOnFloatingTag).toBe(true)
+      await plugin.stop()
+    })
+
     it('uses host network mode and unless-stopped restart policy', async () => {
       const { containers, plugin } = await loadPlugin()
       const { config } = containers._calls.ensureRunning[0]

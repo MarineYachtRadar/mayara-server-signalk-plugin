@@ -60,6 +60,7 @@ The plugin provides a custom configuration panel in the SignalK Admin UI.
 With **signalk-container** installed, the plugin automatically pulls and manages the `ghcr.io/marineyachtradar/mayara-server` container image using host networking for radar multicast discovery.
 
 - **Image version** — select `latest`, `main`, or a specific release tag
+- **Auto-update on each plugin start** — when the selected version is a floating tag (`latest`, `main`, etc.), the plugin pulls from the registry on every start, compares the registry digest against the running container's image, and recreates if newer. Offline-tolerant: if the boat is out of cell coverage at boot, the check is skipped silently and the cached container keeps running. Semver-pinned versions are never auto-updated — pin to a specific release tag if you want to freeze on a known build.
 - **Check** — queries signalk-container's centralized update detection service. Auto-detects whether the running tag is semver (compare via GitHub releases) or floating like `latest`/`main` (compare local digest to remote). Offline-tolerant: if the boat is at sea, returns the last cached result rather than failing.
 - **Update** — pulls the selected version, recreates the container, and reapplies the resource limits (see below).
 - **Arguments** (advanced) — optional CLI args like `--brand furuno --interface eth0`
