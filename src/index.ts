@@ -4,6 +4,7 @@ import { type IncomingMessage } from 'http'
 import { Server as NetServer, type Socket } from 'net'
 import {
   createProxyMiddleware,
+  fixRequestBody,
   responseInterceptor,
   type RequestHandler
 } from 'http-proxy-middleware'
@@ -232,6 +233,21 @@ module.exports = function (app: MayaraServerAPI): Plugin {
           path === '/signalk' || path.startsWith('/signalk/') ? path : `/gui${path}`,
         selfHandleResponse: true,
         on: {
+          // Signal K mounts `express.json()` before the plugin router
+          // for its own /signalk/v1/... handlers, so by the time a
+          // PUT/POST reaches our proxy the original request stream
+          // has already been drained into `req.body`. http-proxy then
+          // opens the upstream socket, copies the `Content-Length`
+          // header from the incoming request, but has no bytes to
+          // pipe — mayara waits for the body that never arrives and
+          // the connection hangs until the client times out. The
+          // visible symptom: every radar control PUT (power, gain,
+          // range, sea, rain, …) from the GUI fails with HTTP 000
+          // / "fetch failed", radar stays in standby. fixRequestBody
+          // re-serializes `req.body` (when present) and writes it to
+          // the upstream ClientRequest with a corrected Content-Length.
+          // For GET / HEAD it's a no-op (req.body is undefined).
+          proxyReq: fixRequestBody,
           // eslint-disable-next-line @typescript-eslint/no-misused-promises -- responseInterceptor returns a function whose Promise return value is awaited by node-http-proxy internally.
           proxyRes: responseInterceptor((buffer, proxyRes, req) => {
             const ct = proxyRes.headers['content-type'] ?? ''
