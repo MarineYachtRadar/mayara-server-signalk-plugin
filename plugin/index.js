@@ -506,7 +506,20 @@ module.exports = function (app) {
             // hint signalk-container assumes inImageUid=0, the in-image
             // mayara user runs under the subuid range, and the in-container
             // mayara process cannot write to the in-image XDG data dir.
-            user: { inImageUid: 1000, inImageGid: 1000 }
+            user: { inImageUid: 1000, inImageGid: 1000 },
+            // When the tag is floating (`latest`, `main`, etc.), have
+            // signalk-container pull on every ensureRunning, compare the
+            // registry digest to the live container's image, and recreate
+            // on drift. Without this, a boat running `:latest` from six
+            // months ago never picks up new mayara-server builds until the
+            // operator clicks Update by hand. signalk-container handles
+            // offline tolerance internally (ENOTFOUND/ENETUNREACH/etc. →
+            // skip silently and leave the cached container running), so
+            // boats out of cell coverage still boot. Semver-pinned users
+            // (e.g. `mayaraVersion: '0.4.2'`) are unaffected — the floating
+            // classifier skips them, making this a true no-op for pinned
+            // deployments.
+            autoUpdateOnFloatingTag: true
         };
         if (Object.keys(env).length > 0) {
             config.env = env;

@@ -62,6 +62,16 @@ export interface ContainerConfig {
   // signalk-container assumes inImageUid/Gid = 0, which is wrong for
   // any non-root image like mayara (USER mayara, UID 1000).
   user?: { inImageUid?: number; inImageGid?: number } | false
+  // signalk-container ≥1.9.0 floating-tag auto-update opt-in. When
+  // true AND `tag` classifies as floating (latest/main/edge/nightly/
+  // stable/dev/rolling/head/trunk, or bare major like v3),
+  // ensureRunning pulls on every call, compares the registry digest
+  // against the live container's image, and recreates on drift.
+  // Offline tolerance is handled inside signalk-container — pull
+  // failures classified as offline (ENOTFOUND, ENETUNREACH, etc.)
+  // are logged at debug and the cached container is left running.
+  // No-op for semver pins.
+  autoUpdateOnFloatingTag?: boolean
 }
 
 export interface ContainerInfo {
