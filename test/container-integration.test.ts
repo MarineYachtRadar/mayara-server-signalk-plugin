@@ -813,6 +813,22 @@ describe('mayara-server-signalk-plugin container integration', () => {
       expect(router.mounts).toContain('/gui')
       await plugin.stop()
     })
+
+    it('wires fixRequestBody on proxyReq to re-stream body-parser-consumed JSON', () => {
+      // SK mounts express.json() before the plugin router, which drains
+      // the request stream into req.body. Without re-streaming, every
+      // PUT/POST through the GUI proxy hangs until the client times
+      // out (HTTP 000) — the upstream socket has the right
+      // Content-Length but zero body bytes. fixRequestBody (a public
+      // export of http-proxy-middleware) re-serializes req.body and
+      // writes it to the ClientRequest. This static guard catches
+      // accidental removal — radar control PUTs would silently break
+      // and the radar would stay in standby with no obvious error.
+      const source = readFileSync(join(__dirname, '../src/index.ts'), 'utf-8')
+      expect(source).toMatch(/proxyReq:\s*fixRequestBody/)
+      expect(source).toMatch(/from\s+['"]http-proxy-middleware['"]/)
+      expect(source).toMatch(/\bfixRequestBody\b/)
+    })
   })
 
   describe('plugin.stop() lifecycle', () => {
