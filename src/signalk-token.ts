@@ -1,8 +1,80 @@
 import { existsSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
+import { request as httpsRequest } from 'https'
 
 const TOKEN_FILENAME = 'signalk-token'
 const POLL_INTERVAL_MS = 5_000
+
+/** Minimal response shape both transports below resolve to. */
+interface JsonResponse {
+  status: number
+  ok: boolean
+  json: () => Promise<unknown>
+}
+
+/**
+ * Issue a JSON request to the local Signal K server and resolve the
+ * parsed body lazily (matching the `fetch` Response surface this module
+ * already uses: `.status`, `.ok`, `.json()`).
+ *
+ * Plain HTTP goes through global `fetch` unchanged. HTTPS goes through
+ * `node:https` with `rejectUnauthorized: false`, because Signal K's
+ * loopback TLS cert is self-signed *and* its SAN never contains
+ * `127.0.0.1` (SK generates a `CN=localhost`/no-SAN cert; other SK cert
+ * tooling covers only the LAN hostname/IP) — so neither plain `fetch`
+ * nor CA-trust can validate a `https://127.0.0.1` connection. Skipping
+ * verification is safe here: the request never leaves the loopback
+ * interface, so there is no MITM surface, and it mirrors what Signal K's
+ * own outbound client does for self-signed peers (`rejectUnauthorized:
+ * !selfsignedcert`). `node:https` is a built-in, so this needs no extra
+ * dependency and no per-request `undici` dispatcher.
+ *
+ * The transport is chosen by the URL scheme, not a flag: only `https:`
+ * URLs (which this module builds solely for the loopback `127.0.0.1`
+ * host) get the verification-disabled `node:https` path, so an absolute
+ * `http://` href can never accidentally route through it.
+ */
+async function requestJson(
+  method: 'GET' | 'POST',
+  url: string,
+  body: string | undefined
+): Promise<JsonResponse> {
+  if (!url.startsWith('https:')) {
+    const res = await fetch(url, {
+      method,
+      headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+      body
+    })
+    return { status: res.status, ok: res.ok, json: () => res.json() }
+  }
+
+  return new Promise<JsonResponse>((resolve, reject) => {
+    const req = httpsRequest(
+      url,
+      {
+        method,
+        rejectUnauthorized: false,
+        headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined
+      },
+      (res) => {
+        const chunks: Buffer[] = []
+        res.on('data', (c: Buffer) => chunks.push(c))
+        res.on('end', () => {
+          const status = res.statusCode ?? 0
+          const text = Buffer.concat(chunks).toString('utf8')
+          resolve({
+            status,
+            ok: status >= 200 && status < 300,
+            json: () => Promise.resolve(text ? (JSON.parse(text) as unknown) : undefined)
+          })
+        })
+      }
+    )
+    req.on('error', reject)
+    if (body !== undefined) req.write(body)
+    req.end()
+  })
+}
 
 export type EnsureResult =
   | { kind: 'cached'; token: string }
@@ -14,6 +86,13 @@ export type EnsureResult =
 export interface EnsureOptions {
   dataDir: string
   signalkPort: number
+  /**
+   * True when the local Signal K server is TLS-enabled. Switches the
+   * access-request POST to `https://127.0.0.1` with verification
+   * disabled (see `requestJson`). Defaults to false (plain HTTP) to
+   * preserve the historical path.
+   */
+  ssl?: boolean
   clientId: string
   description: string
   permissions?: 'readonly' | 'readwrite' | 'admin'
@@ -90,18 +169,19 @@ export async function beginTokenRequest(opts: EnsureOptions): Promise<EnsureResu
   const cached = readCachedToken(opts.dataDir)
   if (cached) return { kind: 'cached', token: cached }
 
-  const url = `http://127.0.0.1:${opts.signalkPort}/signalk/v1/access/requests`
-  let res: Response
+  const scheme = opts.ssl ? 'https' : 'http'
+  const url = `${scheme}://127.0.0.1:${opts.signalkPort}/signalk/v1/access/requests`
+  let res: JsonResponse
   try {
-    res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    res = await requestJson(
+      'POST',
+      url,
+      JSON.stringify({
         clientId: opts.clientId,
         description: opts.description,
         permissions: opts.permissions ?? 'readonly'
       })
-    })
+    )
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     return { kind: 'error', message: `POST ${url} failed: ${msg}` }
@@ -150,30 +230,35 @@ export async function beginTokenRequest(opts: EnsureOptions): Promise<EnsureResu
  *
  * The href returned by SK is a relative path like
  * `/signalk/v1/requests/<uuid>`; we resolve it against
- * `http://127.0.0.1:${signalkPort}`.
+ * `${scheme}://127.0.0.1:${signalkPort}` (https when `ssl`).
  *
  * `pollIntervalMs` defaults to 5s in production (an admin clicking
  * approve is a slow human action; we don't need to poll faster than
  * that). Tests override it to single-digit milliseconds.
+ *
+ * `ssl` is a trailing optional so the existing positional callers keep
+ * working; defaults to plain HTTP.
  */
 export async function awaitApproval(
   href: string,
   signalkPort: number,
   isCancelled: () => boolean,
   log: (msg: string) => void,
-  pollIntervalMs: number = POLL_INTERVAL_MS
+  pollIntervalMs: number = POLL_INTERVAL_MS,
+  ssl: boolean = false
 ): Promise<string | undefined> {
+  const scheme = ssl ? 'https' : 'http'
   const url = href.startsWith('http')
     ? href
-    : `http://127.0.0.1:${signalkPort}${href.startsWith('/') ? '' : '/'}${href}`
+    : `${scheme}://127.0.0.1:${signalkPort}${href.startsWith('/') ? '' : '/'}${href}`
 
   while (!isCancelled()) {
     await sleep(pollIntervalMs)
     if (isCancelled()) return undefined
 
-    let res: Response
+    let res: JsonResponse
     try {
-      res = await fetch(url, { method: 'GET' })
+      res = await requestJson('GET', url, undefined)
     } catch (err) {
       log(
         `Token poll fetch failed (will retry): ${err instanceof Error ? err.message : String(err)}`

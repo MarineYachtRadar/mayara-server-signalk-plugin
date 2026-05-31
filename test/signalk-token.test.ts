@@ -2,6 +2,16 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { EventEmitter } from 'events'
+import type { RequestOptions } from 'https'
+
+// The module imports `request` from 'https' for its TLS path. ESM
+// namespace exports aren't spy-able, so mock the module and drive the
+// exported mock per test via `httpsRequestMock`. `vi.hoisted` makes the
+// mock fn available inside the hoisted `vi.mock` factory.
+const { httpsRequestMock } = vi.hoisted(() => ({ httpsRequestMock: vi.fn() }))
+vi.mock('https', () => ({ request: httpsRequestMock }))
+
 import {
   awaitApproval,
   beginTokenRequest,
@@ -12,9 +22,41 @@ import {
 let dataDir: string
 let originalFetch: typeof globalThis.fetch
 
+/**
+ * Program the mocked `https.request` to capture the URL + options and
+ * replay `status`/`body`. Returns the captured args for assertions. The
+ * module calls it as `request(url, options, callback)`.
+ */
+function stubHttpsRequest(status: number, body: unknown) {
+  const captured: { url?: string; options?: RequestOptions } = {}
+  httpsRequestMock.mockImplementation(
+    (url: string, options: RequestOptions, cb: (res: EventEmitter) => void) => {
+      captured.url = url
+      captured.options = options
+      const res = new EventEmitter() as EventEmitter & { statusCode: number }
+      res.statusCode = status
+      // Defer so the caller can attach .on('data'/'end') first.
+      queueMicrotask(() => {
+        res.emit('data', Buffer.from(JSON.stringify(body)))
+        res.emit('end')
+      })
+      const req = new EventEmitter() as EventEmitter & {
+        write: () => void
+        end: () => void
+      }
+      req.write = () => {}
+      req.end = () => {}
+      cb(res)
+      return req
+    }
+  )
+  return captured
+}
+
 beforeEach(() => {
   dataDir = mkdtempSync(join(tmpdir(), 'mayara-token-test-'))
   originalFetch = globalThis.fetch
+  httpsRequestMock.mockReset()
 })
 
 afterEach(() => {
@@ -182,6 +224,51 @@ describe('signalk-token: beginTokenRequest', () => {
     expect(body.clientId).toBe('mayara-test')
     expect(body.permissions).toBe('readonly')
   })
+
+  it('posts over https with verification disabled when ssl is true', async () => {
+    // A TLS-enabled SK serves the access-request API only over https
+    // (plain HTTP 302-redirects and drops the POST body). The cert is
+    // self-signed with no 127.0.0.1 SAN, so verification must be off.
+    const captured = stubHttpsRequest(202, {
+      state: 'PENDING',
+      requestId: 'req-tls',
+      statusCode: 202,
+      href: '/signalk/v1/requests/req-tls'
+    })
+    // Fail loudly if it wrongly takes the plain-fetch path.
+    globalThis.fetch = vi.fn(() => Promise.reject(new Error('fetch should not be used for ssl')))
+
+    const result = await beginTokenRequest({
+      dataDir,
+      signalkPort: 3443,
+      ssl: true,
+      clientId: 'mayara-test',
+      description: 'Mayara Radar test',
+      permissions: 'readwrite'
+    })
+
+    expect(result).toEqual({
+      kind: 'pending',
+      requestId: 'req-tls',
+      href: '/signalk/v1/requests/req-tls'
+    })
+    expect(captured.url).toBe('https://127.0.0.1:3443/signalk/v1/access/requests')
+    expect(captured.options?.rejectUnauthorized).toBe(false)
+  })
+
+  it('stays on http (global fetch) when ssl is omitted', async () => {
+    // Regression guard: the default path must not touch https.request.
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve(makeFetchResponse(202, { state: 'PENDING', requestId: 'r', href: '/x' }))
+    )
+    await beginTokenRequest({
+      dataDir,
+      signalkPort: 3000,
+      clientId: 'mayara-test',
+      description: 'x'
+    })
+    expect(httpsRequestMock).not.toHaveBeenCalled()
+  })
 })
 
 describe('signalk-token: awaitApproval', () => {
@@ -269,5 +356,26 @@ describe('signalk-token: awaitApproval', () => {
       5
     )
     expect(urls[0]).toBe('http://127.0.0.1:4321/signalk/v1/requests/r')
+  })
+
+  it('resolves a relative href against https with verification off when ssl is true', async () => {
+    const captured = stubHttpsRequest(200, {
+      state: 'COMPLETED',
+      requestId: 'r',
+      accessRequest: { token: 'tls-token' }
+    })
+    globalThis.fetch = vi.fn(() => Promise.reject(new Error('fetch should not be used for ssl')))
+
+    const token = await awaitApproval(
+      '/signalk/v1/requests/r',
+      3443,
+      () => false,
+      () => {},
+      5,
+      true
+    )
+    expect(token).toBe('tls-token')
+    expect(captured.url).toBe('https://127.0.0.1:3443/signalk/v1/requests/r')
+    expect(captured.options?.rejectUnauthorized).toBe(false)
   })
 })

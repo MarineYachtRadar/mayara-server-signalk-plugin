@@ -558,6 +558,20 @@ module.exports = function (app: MayaraServerAPI): Plugin {
   }
 
   /**
+   * Same ssl/port source of truth as `resolveSignalkLoopback`, mapped to
+   * the HTTP(S) scheme the device-token flow needs. The two must stay in
+   * lock-step: when SK is TLS-enabled it serves the access-request API
+   * only over https (the plain-HTTP listener 302-redirects, dropping the
+   * POST body), exactly as it serves the data stream only over wss.
+   * Deriving both from the one resolver guarantees the nav transport and
+   * the token flow never disagree about whether SK is secured.
+   */
+  function resolveSignalkApi(): { scheme: 'http' | 'https'; port: number } {
+    const { scheme, port } = resolveSignalkLoopback()
+    return { scheme: scheme === 'wss' ? 'https' : 'http', port }
+  }
+
+  /**
    * Build a ContainerConfig for the mayara-server container with the
    * given tag. Used at startup, when applying updates, and after a
    * background token mint completes — signalk-container drift-detects
@@ -689,7 +703,11 @@ module.exports = function (app: MayaraServerAPI): Plugin {
       return
     }
 
-    const skPort = Number(process.env.PORT) || 3000
+    // Derive scheme + port from the live SK config (same source of
+    // truth as the nav transport) so a TLS-enabled server is reached
+    // over https — its plain-HTTP listener 302-redirects and drops the
+    // POST body, so http would never mint a token.
+    const sk = resolveSignalkApi()
     // Request `readwrite` so mayara can later push deltas back into SK
     // (radar targets, MARPA tracks, heading echoes, guard-zone
     // notifications). Today the token only reads the AIS REST snapshot,
@@ -699,7 +717,8 @@ module.exports = function (app: MayaraServerAPI): Plugin {
     // writeback features land in mayara-server.
     const begin = await beginTokenRequest({
       dataDir,
-      signalkPort: skPort,
+      signalkPort: sk.port,
+      ssl: sk.scheme === 'https',
       clientId: PLUGIN_ID,
       description:
         'MaYaRa Radar (Server) — AIS overlay seeding + radar/target/notification writebacks',
@@ -742,11 +761,13 @@ module.exports = function (app: MayaraServerAPI): Plugin {
 
     const token = await awaitApproval(
       begin.href,
-      skPort,
+      sk.port,
       () => tokenPollerCancelled,
       (msg) => {
         app.debug(msg)
-      }
+      },
+      undefined, // keep the default poll interval
+      sk.scheme === 'https'
     )
     if (!token) {
       // Denied, expired, or plugin stopped. Either way, leave the
