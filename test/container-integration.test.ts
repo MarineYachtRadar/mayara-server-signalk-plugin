@@ -18,15 +18,20 @@ import type {
 // mock the modules at import time.
 
 vi.mock('../src/mayara-client', () => {
-  return {
-    MayaraClient: vi.fn().mockImplementation(() => ({
+  // A `new`-able stand-in. `vi.fn().mockImplementation(() => ({...}))`
+  // returns an arrow function, which throws "is not a constructor" when
+  // the plugin does `new MayaraClient(...)`, so use a plain function.
+  function MayaraClient() {
+    return {
       getRadars: vi.fn().mockResolvedValue({}),
       getCapabilities: vi.fn().mockResolvedValue({}),
       close: vi.fn(),
       getSpokeStreamUrl: vi.fn().mockReturnValue('ws://localhost:6502/x'),
-      getTargetStreamUrl: vi.fn().mockReturnValue('ws://localhost:6502/y')
-    }))
+      getTargetStreamUrl: vi.fn().mockReturnValue('ws://localhost:6502/y'),
+      getStateStreamUrl: vi.fn().mockReturnValue('ws://localhost:6502/signalk/v1/stream')
+    }
   }
+  return { MayaraClient }
 })
 
 vi.mock('../src/radar-provider', () => ({
@@ -554,6 +559,10 @@ describe('mayara-server-signalk-plugin container integration', () => {
       }
       containers._nextCheckResult = customResult
 
+      // The startup connect path also calls checkOne (to surface the
+      // update hint); clear it so this asserts only the route's call.
+      containers._calls.updateCheckOne = []
+
       const res = makeRes()
       await handler({}, res)
 
@@ -571,6 +580,49 @@ describe('mayara-server-signalk-plugin container integration', () => {
       const res = makeRes()
       await handler({}, res)
       expect(res.statusCode).toBe(503)
+      await plugin.stop()
+    })
+  })
+
+  describe('update-available status hint', () => {
+    it('appends an update hint to the Connected status when one is available', async () => {
+      const containers = makeMockContainerManager()
+      containers._nextCheckResult = {
+        pluginId: 'mayara-server-signalk-plugin',
+        containerName: 'mayara-server',
+        runningTag: 'main',
+        tagKind: 'floating',
+        currentVersion: null,
+        latestVersion: null,
+        updateAvailable: true,
+        reason: 'digest-drift',
+        checkedAt: '2026-06-01T00:00:00.000Z',
+        lastSuccessfulCheckAt: '2026-06-01T00:00:00.000Z',
+        fromCache: false
+      }
+      globalThis.__signalk_containerManager = containers
+      const app = makeMockApp()
+      vi.resetModules()
+      const mod = (await import('../src/index')) as unknown as {
+        default: (a: unknown) => { start: (c: unknown) => void; stop: () => void | Promise<void> }
+      }
+      const plugin = mod.default(app)
+      plugin.start({ managedContainer: true, mayaraVersion: 'main', requestSignalkToken: false })
+      // Allow the connect + async refreshUpdateHint().then() chain to settle.
+      await new Promise<void>((resolve) => setTimeout(resolve, 80))
+
+      const statuses = app.setPluginStatus.mock.calls.map((c) => c[0] as string)
+      expect(statuses.some((s) => s.includes('update available'))).toBe(true)
+      await plugin.stop()
+    })
+
+    it('does not append a hint when no update is available', async () => {
+      // Default mock checkOne returns updateAvailable: false.
+      const { app, plugin } = await loadPlugin({ mayaraVersion: 'main' })
+      await new Promise<void>((resolve) => setTimeout(resolve, 300))
+      const statuses = app.setPluginStatus.mock.calls.map((c) => c[0] as string)
+      expect(statuses.some((s) => s.startsWith('Connected'))).toBe(true)
+      expect(statuses.some((s) => s.includes('update available'))).toBe(false)
       await plugin.stop()
     })
   })

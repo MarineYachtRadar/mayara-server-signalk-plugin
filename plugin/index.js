@@ -54,6 +54,10 @@ module.exports = function (app) {
     let tokenPollerCancelled = false;
     let reconnectInterval = null;
     let isConnected = false;
+    // Appended to the "Connected" status line when a newer container image
+    // is available, so a stale image is visible where the operator already
+    // looks instead of silently running an old build. Empty otherwise.
+    let updateHint = '';
     const knownRadars = new Set();
     // Track the WebSocket upgrade listener so stop() can detach it.
     // The HTTP server outlives plugin restarts (disable/enable, config
@@ -138,6 +142,7 @@ module.exports = function (app) {
                 upgradeListenerServer = null;
             }
             isConnected = false;
+            updateHint = '';
             app.setPluginStatus('Stopped');
         },
         registerWithRouter(router) {
@@ -419,6 +424,8 @@ module.exports = function (app) {
                             });
                         });
                     }
+                    // The freshly-applied image is now current; clear any stale hint.
+                    updateHint = '';
                     app.setPluginStatus(`Updated to mayara-server:${tag}`);
                     res.json({ success: true, tag });
                 }
@@ -839,6 +846,30 @@ module.exports = function (app) {
         }
         await connectAndDiscover(settings);
     }
+    // Compose the "Connected" status line, appending the update hint when
+    // a newer container image is available.
+    function connectedStatus(radarCount) {
+        return `Connected - ${radarCount} radar(s)${updateHint}`;
+    }
+    // Ask signalk-container's (offline-tolerant, cached) update service
+    // whether a newer image exists and set `updateHint` accordingly. Cheap
+    // and best-effort: any failure leaves the hint cleared. Managed mode
+    // only — in external mode the plugin doesn't own the image.
+    async function refreshUpdateHint() {
+        if (currentSettings?.managedContainer === false)
+            return;
+        const containers = getContainerManager();
+        if (!containers)
+            return;
+        try {
+            const result = await containers.updates.checkOne(PLUGIN_ID);
+            updateHint = result.updateAvailable ? ' · update available (click Update)' : '';
+        }
+        catch (err) {
+            app.debug(`Update check failed: ${errMsg(err)}`);
+            updateHint = '';
+        }
+    }
     async function connectAndDiscover(settings) {
         if (!client)
             return;
@@ -846,8 +877,14 @@ module.exports = function (app) {
             const radars = await client.getRadars();
             isConnected = true;
             const radarIds = Object.keys(radars);
-            app.setPluginStatus(`Connected - ${radarIds.length} radar(s) found`);
+            app.setPluginStatus(connectedStatus(radarIds.length));
             updateRadars(radarIds, settings);
+            // Best-effort, non-blocking: surface "update available" in the
+            // status line once the check resolves, so a stale image is visible.
+            void refreshUpdateHint().then(() => {
+                if (isConnected)
+                    app.setPluginStatus(connectedStatus(knownRadars.size));
+            });
             const pollMs = (settings.discoveryPollInterval || 10) * 1000;
             discoveryInterval = setInterval(() => {
                 void pollForRadarChanges(settings);
@@ -869,12 +906,19 @@ module.exports = function (app) {
             const radars = await client.getRadars();
             isConnected = true;
             const radarIds = Object.keys(radars);
-            app.setPluginStatus(`Connected - ${radarIds.length} radar(s) found`);
+            app.setPluginStatus(connectedStatus(radarIds.length));
             if (reconnectInterval) {
                 clearInterval(reconnectInterval);
                 reconnectInterval = null;
             }
             updateRadars(radarIds, settings);
+            // A boot that reaches "Connected" via reconnect (mayara not ready
+            // at startup) skips connectAndDiscover, so recompute the update
+            // hint here too — same best-effort, non-blocking refresh.
+            void refreshUpdateHint().then(() => {
+                if (isConnected)
+                    app.setPluginStatus(connectedStatus(knownRadars.size));
+            });
             if (discoveryInterval) {
                 clearInterval(discoveryInterval);
             }
@@ -930,7 +974,7 @@ module.exports = function (app) {
             const radars = await client.getRadars();
             const radarIds = Object.keys(radars);
             updateRadars(radarIds, settings);
-            app.setPluginStatus(`Connected - ${radarIds.length} radar(s)`);
+            app.setPluginStatus(connectedStatus(radarIds.length));
         }
         catch (err) {
             isConnected = false;
