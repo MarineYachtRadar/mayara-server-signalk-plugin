@@ -181,9 +181,14 @@ interface MockApp {
   savePluginOptions: ReturnType<typeof vi.fn>
   radarApi: { register: ReturnType<typeof vi.fn>; unRegister: ReturnType<typeof vi.fn> }
   binaryStreamManager: undefined
+  // Mirrors signalk-server's runtime `app.config`. The public
+  // `@signalk/server-api` types don't declare it, so the plugin reads it
+  // via an untyped cast; tests populate `settings.ssl`/`sslport`/`port`
+  // to drive the nav-address scheme/port resolution.
+  config?: { settings?: { ssl?: boolean; sslport?: number; port?: number } }
 }
 
-function makeMockApp(): MockApp {
+function makeMockApp(config?: MockApp['config']): MockApp {
   return {
     debug: vi.fn(),
     error: vi.fn(),
@@ -192,6 +197,7 @@ function makeMockApp(): MockApp {
     // Opaque string — mayara no longer reads or writes anything in
     // getDataDirPath() now that the hash-file workaround is gone.
     getDataDirPath: () => '/tmp/mayara-test',
+    config,
     // SignalK persistence API: writes to plugin-config-data/<pluginId>.json
     // The signature is (config, callback) where callback gets a NodeJS.ErrnoException | null.
     savePluginOptions: vi.fn(
@@ -298,11 +304,14 @@ interface LoadedPlugin {
   router: CapturedRouter
 }
 
-async function loadPlugin(initialConfig: Record<string, unknown> = {}): Promise<LoadedPlugin> {
+async function loadPlugin(
+  initialConfig: Record<string, unknown> = {},
+  appConfig?: MockApp['config']
+): Promise<LoadedPlugin> {
   const containers = makeMockContainerManager()
   globalThis.__signalk_containerManager = containers
 
-  const app = makeMockApp()
+  const app = makeMockApp(appConfig)
 
   // Force a fresh module load each test so module-level state doesn't leak.
   vi.resetModules()
@@ -678,15 +687,61 @@ describe('mayara-server-signalk-plugin container integration', () => {
       const tokenModule = await loadTokenMock()
       vi.mocked(tokenModule.readCachedToken).mockReturnValue('cached-jwt-abc')
 
+      // No app.config / no SSLPORT env → non-TLS default: plain ws:.
       const { containers, plugin } = await loadPlugin({ requestSignalkToken: true })
       const { config } = containers._calls.ensureRunning[0]
       const command = config.command ?? []
       expect(command).not.toContain('--signalk-token-file')
+      // Plain ws → no cert-acceptance flag.
+      expect(command).not.toContain('--accept-invalid-certs')
       const navIdx = command.indexOf('-n')
       expect(command[navIdx + 1]).toMatch(/^ws:127\.0\.0\.1:\d+$/)
       expect(config.env).toEqual({ MAYARA_SIGNALK_TOKEN: 'cached-jwt-abc' })
       // No bind mount needed for the token under env-var delivery.
       expect(config.volumes).toBeUndefined()
+
+      vi.mocked(tokenModule.readCachedToken).mockReturnValue(undefined)
+      await plugin.stop()
+    })
+
+    it('uses wss: + --accept-invalid-certs and the SSL port when SK has TLS enabled', async () => {
+      // A TLS-enabled SK only serves wss:// (plain HTTP 302-redirects to
+      // HTTPS, which mayara's discovery client can't follow). The
+      // nav-address must therefore be wss: on the SSL port, with
+      // --accept-invalid-certs for the self-signed loopback cert.
+      const tokenModule = await loadTokenMock()
+      vi.mocked(tokenModule.readCachedToken).mockReturnValue('cached-jwt-abc')
+
+      const { containers, plugin } = await loadPlugin(
+        { requestSignalkToken: true },
+        { settings: { ssl: true, sslport: 8443 } }
+      )
+      const { config } = containers._calls.ensureRunning[0]
+      const command = config.command ?? []
+      const navIdx = command.indexOf('-n')
+      expect(command[navIdx + 1]).toBe('wss:127.0.0.1:8443')
+      expect(command).toContain('--accept-invalid-certs')
+      expect(config.env).toEqual({ MAYARA_SIGNALK_TOKEN: 'cached-jwt-abc' })
+
+      vi.mocked(tokenModule.readCachedToken).mockReturnValue(undefined)
+      await plugin.stop()
+    })
+
+    it('uses the configured non-SSL port from app.config when TLS is off', async () => {
+      // Port must track the live SK config, not a frozen process.env.PORT
+      // — the user switches the SK port on dev machines.
+      const tokenModule = await loadTokenMock()
+      vi.mocked(tokenModule.readCachedToken).mockReturnValue('cached-jwt-abc')
+
+      const { containers, plugin } = await loadPlugin(
+        { requestSignalkToken: true },
+        { settings: { ssl: false, port: 3001 } }
+      )
+      const { config } = containers._calls.ensureRunning[0]
+      const command = config.command ?? []
+      const navIdx = command.indexOf('-n')
+      expect(command[navIdx + 1]).toBe('ws:127.0.0.1:3001')
+      expect(command).not.toContain('--accept-invalid-certs')
 
       vi.mocked(tokenModule.readCachedToken).mockReturnValue(undefined)
       await plugin.stop()
