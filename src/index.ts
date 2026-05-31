@@ -1025,6 +1025,13 @@ module.exports = function (app: MayaraServerAPI): Plugin {
 
       updateRadars(radarIds, settings)
 
+      // A boot that reaches "Connected" via reconnect (mayara not ready
+      // at startup) skips connectAndDiscover, so recompute the update
+      // hint here too — same best-effort, non-blocking refresh.
+      void refreshUpdateHint().then(() => {
+        if (isConnected) app.setPluginStatus(connectedStatus(knownRadars.size))
+      })
+
       if (discoveryInterval) {
         clearInterval(discoveryInterval)
       }
