@@ -727,6 +727,26 @@ describe('mayara-server-signalk-plugin container integration', () => {
       await plugin.stop()
     })
 
+    it('falls back to the default SSL port 3443 when ssl is on but sslport is unset', async () => {
+      // Locks in the getSslPort fallback (SSLPORT || sslport || 3443) so
+      // a regression in the default doesn't go unnoticed.
+      const tokenModule = await loadTokenMock()
+      vi.mocked(tokenModule.readCachedToken).mockReturnValue('cached-jwt-abc')
+
+      const { containers, plugin } = await loadPlugin(
+        { requestSignalkToken: true },
+        { settings: { ssl: true } }
+      )
+      const { config } = containers._calls.ensureRunning[0]
+      const command = config.command ?? []
+      const navIdx = command.indexOf('-n')
+      expect(command[navIdx + 1]).toBe('wss:127.0.0.1:3443')
+      expect(command).toContain('--accept-invalid-certs')
+
+      vi.mocked(tokenModule.readCachedToken).mockReturnValue(undefined)
+      await plugin.stop()
+    })
+
     it('uses the configured non-SSL port from app.config when TLS is off', async () => {
       // Port must track the live SK config, not a frozen process.env.PORT
       // — the user switches the SK port on dev machines.
