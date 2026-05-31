@@ -470,18 +470,21 @@ module.exports = function (app) {
      * advertised one (`getExternalPort()` may honor `EXTERNALPORT` or a
      * reverse-proxy port that isn't reachable on loopback).
      *
-     * Source of truth, in priority order:
-     *   1. The live SK runtime config (`app.config.settings`). This is the
-     *      only reliable signal — `process.env.PORT` alone is the plain-
-     *      HTTP port even on a TLS server (where the API lives on the SSL
-     *      port). The `@signalk/server-api` types don't declare `config`,
-     *      so it's an untyped, fully optional-chained read.
-     *   2. Environment fallback when config is unreadable: `SSLPORT`
-     *      implies TLS; otherwise plain HTTP on `PORT`.
-     *   3. Final fallback: plain `ws` on 3000 (the historical default).
+     * TLS detection: prefer `settings.ssl` when it's an explicit boolean;
+     * otherwise infer TLS from the presence of the `SSLPORT` env var. We
+     * read `app.config.settings` because `process.env.PORT` alone is the
+     * plain-HTTP port even on a TLS server (where the API lives on the SSL
+     * port). The `@signalk/server-api` types don't declare `config`, so
+     * it's an untyped, fully optional-chained read.
      *
-     * The port resolution mirrors signalk-server's own `getSslPort` /
-     * `getHttpPort` (`SSLPORT||sslport||3443` and `PORT||port||3000`).
+     * Port resolution mirrors signalk-server's own `getSslPort` /
+     * `getHttpPort`, where the env var takes precedence over the config
+     * value:
+     *   - TLS:   `SSLPORT || settings.sslport || 3443`
+     *   - plain: `PORT    || settings.port    || 3000`
+     *
+     * With neither config nor env present this resolves to the historical
+     * default of plain `ws` on 3000.
      */
     function resolveSignalkLoopback() {
         const cfg = app.config;
