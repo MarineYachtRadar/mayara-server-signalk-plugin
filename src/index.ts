@@ -518,6 +518,46 @@ module.exports = function (app: MayaraServerAPI): Plugin {
   // ==========================================================================
 
   /**
+   * Resolve how mayara-server should reach the local Signal K server
+   * over the loopback interface: the WebSocket scheme (`ws` vs `wss`)
+   * and the port SK's own listener is bound to.
+   *
+   * The container runs with `networkMode: 'host'`, so `127.0.0.1` inside
+   * it is the host loopback — i.e. SK's own listener. We therefore want
+   * SK's *local* listener port and TLS state, not the externally
+   * advertised one (`getExternalPort()` may honor `EXTERNALPORT` or a
+   * reverse-proxy port that isn't reachable on loopback).
+   *
+   * TLS detection: prefer `settings.ssl` when it's an explicit boolean;
+   * otherwise infer TLS from the presence of the `SSLPORT` env var. We
+   * read `app.config.settings` because `process.env.PORT` alone is the
+   * plain-HTTP port even on a TLS server (where the API lives on the SSL
+   * port). The `@signalk/server-api` types don't declare `config`, so
+   * it's an untyped, fully optional-chained read.
+   *
+   * Port resolution mirrors signalk-server's own `getSslPort` /
+   * `getHttpPort`, where the env var takes precedence over the config
+   * value:
+   *   - TLS:   `SSLPORT || settings.sslport || 3443`
+   *   - plain: `PORT    || settings.port    || 3000`
+   *
+   * With neither config nor env present this resolves to the historical
+   * default of plain `ws` on 3000.
+   */
+  function resolveSignalkLoopback(): { scheme: 'ws' | 'wss'; port: number } {
+    const cfg = (app as unknown as { config?: { settings?: Record<string, unknown> } }).config
+    const settings = cfg?.settings
+
+    const ssl = typeof settings?.ssl === 'boolean' ? settings.ssl : Boolean(process.env.SSLPORT)
+
+    const port = ssl
+      ? Number(process.env.SSLPORT) || Number(settings?.sslport) || 3443
+      : Number(process.env.PORT) || Number(settings?.port) || 3000
+
+    return { scheme: ssl ? 'wss' : 'ws', port }
+  }
+
+  /**
    * Build a ContainerConfig for the mayara-server container with the
    * given tag. Used at startup, when applying updates, and after a
    * background token mint completes — signalk-container drift-detects
@@ -525,9 +565,14 @@ module.exports = function (app: MayaraServerAPI): Plugin {
    * transparently.
    *
    * Default nav-address is the upstream Signal K server itself:
-   *   - `ws:127.0.0.1:${SK_PORT}` plus `MAYARA_SIGNALK_TOKEN` env var
-   *     when a cached device token exists (full WS path → AIS REST
-   *     seeding works inside the container).
+   *   - `${ws|wss}:127.0.0.1:${SK_PORT}` plus `MAYARA_SIGNALK_TOKEN`
+   *     env var when a cached device token exists (full WS path → AIS
+   *     REST seeding works inside the container). The scheme and port
+   *     are derived from the live SK config (`resolveSignalkLoopback`),
+   *     not hardcoded — a TLS-enabled SK only speaks `wss:` and serves
+   *     plain HTTP as a 302→HTTPS redirect that mayara's discovery
+   *     client can't follow. `--accept-invalid-certs` is added for the
+   *     `wss:` loopback (self-signed localhost cert).
    *   - `tcp:127.0.0.1:${TCPSTREAMPORT}` otherwise (legacy delta
    *     stream; AIS overlay still works but only fills from live
    *     deltas, not the initial REST snapshot).
@@ -550,7 +595,7 @@ module.exports = function (app: MayaraServerAPI): Plugin {
     const userArgs = currentSettings?.mayaraArgs ?? []
     const userOverridesNav = userArgs.some((a) => a === '-n' || a === '--navigation-address')
 
-    const skPort = Number(process.env.PORT) || 3000
+    const sk = resolveSignalkLoopback()
     const tcpPort = Number(process.env.TCPSTREAMPORT) || 8375
     const dataDir = app.getDataDirPath()
     const cachedToken = userOverridesNav ? undefined : readCachedToken(dataDir)
@@ -560,7 +605,24 @@ module.exports = function (app: MayaraServerAPI): Plugin {
 
     if (!userOverridesNav) {
       if (cachedToken !== undefined) {
-        injected.push('-n', `ws:127.0.0.1:${skPort}`)
+        // Derive the scheme + port from the live Signal K server config
+        // rather than hardcoding `ws:` and `process.env.PORT`. On a
+        // TLS-enabled SK the plain-HTTP listener only 302-redirects to
+        // HTTPS, and mayara's discovery client rejects the redirect (it
+        // requires a 200 and does not follow `Location`) — so `ws:` to
+        // the HTTP port loops forever and no AIS/nav ever reaches the
+        // radar. `wss:` against the SSL port is the only path that
+        // completes discovery (the SK discovery doc advertises only
+        // `wss://` when ssl is on).
+        injected.push('-n', `${sk.scheme}:127.0.0.1:${sk.port}`)
+        // mayara refuses to start HTTPS discovery against a self-signed
+        // cert without this, and re-checks it on the WSS upgrade. The SK
+        // loopback cert is self-signed; accepting it is safe because the
+        // connection never leaves 127.0.0.1 (no MITM surface). Only
+        // injected for the secure scheme.
+        if (sk.scheme === 'wss') {
+          injected.push('--accept-invalid-certs')
+        }
         env.MAYARA_SIGNALK_TOKEN = cachedToken
       } else {
         injected.push('-n', `tcp:127.0.0.1:${tcpPort}`)
