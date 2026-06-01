@@ -368,12 +368,17 @@ export default function PluginConfigurationPanel({ configuration, save }) {
   const containerState = pluginStatus?.container?.state;
   const containerImage = pluginStatus?.container?.image || "";
   const runningTag = containerImage.split(":")[1] || "unknown";
-  const updateAvailable = versions.length > 0 && mayaraVersion === "latest"
-    ? false  // can't compare "latest" to release tags
+  const isPrTag = /^pr\d+$/.test(mayaraVersion);
+  const updateAvailable = isPrTag || mayaraVersion === "latest"
+    ? false  // PR test images and floating "latest" aren't version-compared
     : versions.length > 0 && !versions.some((v) => v.tag === mayaraVersion);
 
-  const stableVersions = versions.filter((v) => !v.prerelease).slice(0, 5);
-  const preVersions = versions.filter((v) => v.prerelease).slice(0, 3);
+  // PR test images carry a `pr` number (no `prerelease`); split them out so
+  // they aren't misclassified as stable releases.
+  const prVersions = versions.filter((v) => typeof v.pr === "number");
+  const releaseVersions = versions.filter((v) => typeof v.pr !== "number");
+  const stableVersions = releaseVersions.filter((v) => !v.prerelease).slice(0, 5);
+  const preVersions = releaseVersions.filter((v) => v.prerelease).slice(0, 3);
 
   return (
     <div style={S.root}>
@@ -454,6 +459,13 @@ export default function PluginConfigurationPanel({ configuration, save }) {
               {stableVersions.map((v, i) => (
                 <option key={v.tag} value={v.tag}>{v.tag}{i === 0 ? " (current stable)" : ""}</option>
               ))}
+              {prVersions.length > 0 && (
+                <optgroup label="PR test images">
+                  {prVersions.map((v) => (
+                    <option key={v.tag} value={v.tag}>{v.tag} — {v.title}</option>
+                  ))}
+                </optgroup>
+              )}
             </select>
             {versionsLoading && <span style={S.hint}>loading...</span>}
             <button
