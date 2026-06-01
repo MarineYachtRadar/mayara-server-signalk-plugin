@@ -640,27 +640,11 @@ module.exports = function (app) {
         }
         return config;
     }
-    /**
-     * Drive the Signal K device-access-request flow to obtain a token,
-     * then recreate the mayara container with the WS-based config so the
-     * AIS REST seeder can populate the in-radar overlay from the
-     * upstream `vessels/` snapshot.
-     *
-     * Fast path: a cached token already exists — log it and we're done
-     * (the container was already started with the correct config by
-     * `buildContainerConfig`).
-     *
-     * Slow path: POST a request, surface "Awaiting approval" plugin
-     * status, poll until admin approves (or denies, or stop() is
-     * called). On approval, write the token and re-call ensureRunning
-     * so signalk-container drift-detects the new `command`/`env` and
-     * recreates the container.
-     */
     async function ensureSignalkToken(containers, tag) {
         const dataDir = app.getDataDirPath();
         if ((0, signalk_token_1.readCachedToken)(dataDir)) {
             app.debug('Signal K token cached; container started with WS transport');
-            return;
+            return 'done';
         }
         // Derive scheme + port from the live SK config (same source of
         // truth as the nav transport) so a TLS-enabled server is reached
@@ -687,22 +671,23 @@ module.exports = function (app) {
                 // Race: token landed between the readCachedToken above and the
                 // POST. Recreate to pick up WS transport.
                 await containers.ensureRunning(CONTAINER_NAME, buildContainerConfig(tag));
-                return;
+                return 'done';
             case 'no-security':
                 app.debug('Signal K security disabled; no token needed');
                 // SK serves no-security WS without auth, so switch from tcp:
                 // to ws: by recreating with the same buildContainerConfig
                 // (which always emits ws: when haveToken is true, but here
                 // haveToken is false — fall back to tcp:, which still works).
-                return;
+                return 'done';
             case 'requests-disabled':
                 app.setPluginStatus('Signal K device access requests are disabled. To enable the AIS ' +
                     "overlay's initial REST snapshot, enable device access requests in " +
                     'Security settings, or add `--signalk-token <token>` to mayaraArgs.');
-                return;
+                // Recoverable: the operator may enable device requests later.
+                return 'retry';
             case 'error':
                 app.debug(`Signal K token request error: ${begin.message}`);
-                return;
+                return 'retry';
             case 'pending':
                 // Fall through to the polling block below.
                 break;
@@ -715,14 +700,15 @@ module.exports = function (app) {
         }, undefined, // keep the default poll interval
         sk.scheme === 'https');
         if (!token) {
-            // Denied, expired, or plugin stopped. Either way, leave the
-            // container on its existing transport; user can request again
-            // by restarting the plugin.
-            if (!tokenPollerCancelled) {
-                app.setPluginStatus('Signal K token request was denied or expired. AIS overlay will ' +
-                    'fill from live deltas only. Restart the plugin to request again.');
+            // Denied, expired, or plugin stopped. Leave the container on its
+            // existing transport. If we weren't stopped, this is recoverable —
+            // the operator may approve a fresh request later.
+            if (tokenPollerCancelled) {
+                return 'done';
             }
-            return;
+            app.setPluginStatus('Signal K token request was denied or expired. AIS overlay will ' +
+                'fill from live deltas only; will re-request periodically.');
+            return 'retry';
         }
         (0, signalk_token_1.writeCachedToken)(dataDir, token);
         app.debug('Signal K token approved and cached; recreating container with WS transport');
@@ -735,6 +721,32 @@ module.exports = function (app) {
             app.setPluginError(`Token approved but container recreate failed: ${errMsg(err)}. ` +
                 `Restart the plugin to retry.`);
         }
+        return 'done';
+    }
+    /**
+     * Wrap `ensureSignalkToken` in a bounded re-request loop so an operator who
+     * approves the device request (or enables device access requests) later is
+     * picked up without a plugin restart. Each attempt that returns `retry`
+     * waits `recoveryMs` before the next, capped at `MAX_TOKEN_RECOVERY_ATTEMPTS`
+     * so a permanently-denied install doesn't poll forever. The shared
+     * `tokenPollerCancelled` flag (set by `stop()`) ends the loop promptly so it
+     * never outlives the plugin.
+     */
+    async function ensureSignalkTokenWithRecovery(containers, tag, recoveryMs) {
+        const MAX_TOKEN_RECOVERY_ATTEMPTS = 60;
+        for (let attempt = 0; attempt < MAX_TOKEN_RECOVERY_ATTEMPTS; attempt++) {
+            if (tokenPollerCancelled) {
+                return;
+            }
+            const outcome = await ensureSignalkToken(containers, tag);
+            if (outcome === 'done') {
+                return;
+            }
+            // Recoverable failure: wait, then re-attempt — unless we were stopped
+            // while waiting.
+            await new Promise((resolve) => setTimeout(resolve, recoveryMs));
+        }
+        app.debug('Signal K token recovery gave up after repeated failures; restart the plugin to retry');
     }
     /**
      * Wait up to `timeoutMs` for signalk-container to be both loaded
@@ -785,10 +797,13 @@ module.exports = function (app) {
         // Kick off Signal K device-token acquisition in the background. The
         // container is already running with whatever transport the cached
         // token (or lack thereof) selected; if we mint a new token here we
-        // recreate it later to switch transports. Failure paths only flip
-        // plugin status — they don't block startup.
+        // recreate it later to switch transports. Recoverable failures (request
+        // denied, device requests disabled, transient error) re-request on the
+        // reconnect cadence so a later approval is picked up without a restart;
+        // none of this blocks startup.
         if (settings.requestSignalkToken !== false) {
-            void ensureSignalkToken(containers, tag).catch((err) => {
+            const recoveryMs = (settings.reconnectInterval || 5) * 1000;
+            void ensureSignalkTokenWithRecovery(containers, tag, recoveryMs).catch((err) => {
                 app.debug(`Signal K token acquisition failed: ${errMsg(err)}`);
             });
         }

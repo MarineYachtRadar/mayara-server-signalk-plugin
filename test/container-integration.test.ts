@@ -1014,6 +1014,45 @@ describe('mayara-server-signalk-plugin container integration', () => {
       )
       await plugin.stop()
     })
+
+    it('re-requests on the reconnect cadence after a recoverable failure', async () => {
+      // A recoverable outcome (here: device requests disabled) should not be
+      // terminal — the operator may enable requests later, so the plugin
+      // re-attempts on the reconnect cadence without needing a restart.
+      const tokenModule = await loadTokenMock()
+      vi.mocked(tokenModule.beginTokenRequest).mockResolvedValue({
+        kind: 'requests-disabled'
+      })
+
+      // Tiny reconnect interval so several recovery attempts fire quickly.
+      const { plugin } = await loadPlugin({
+        requestSignalkToken: true,
+        reconnectInterval: 0.01
+      })
+
+      // Let a few recovery cycles run.
+      await new Promise<void>((resolve) => setTimeout(resolve, 80))
+      expect(vi.mocked(tokenModule.beginTokenRequest).mock.calls.length).toBeGreaterThan(1)
+      await plugin.stop()
+    })
+
+    it('stops re-requesting once the plugin is stopped', async () => {
+      const tokenModule = await loadTokenMock()
+      vi.mocked(tokenModule.beginTokenRequest).mockResolvedValue({
+        kind: 'requests-disabled'
+      })
+
+      const { plugin } = await loadPlugin({
+        requestSignalkToken: true,
+        reconnectInterval: 0.01
+      })
+      await plugin.stop()
+      const countAfterStop = vi.mocked(tokenModule.beginTokenRequest).mock.calls.length
+
+      // No further attempts should accrue after stop() flips the cancel flag.
+      await new Promise<void>((resolve) => setTimeout(resolve, 80))
+      expect(vi.mocked(tokenModule.beginTokenRequest).mock.calls.length).toBe(countAfterStop)
+    })
   })
 
   describe('GUI reverse proxy mount', () => {
