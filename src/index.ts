@@ -485,37 +485,68 @@ module.exports = function (app: MayaraServerAPI): Plugin {
         res.json({ url: `${GUI_PROXY_PATH}/` })
       })
 
-      // Lists available release tags for the version dropdown in the
-      // config panel. signalk-container's update service exposes "what
-      // is the latest" but not "list all" — the latter belongs in the
-      // plugin (it knows which repo to ask). This is the only place
-      // mayara still talks to GitHub directly.
+      // Lists available image tags for the version dropdown in the config
+      // panel: GitHub release tags plus per-PR test images. signalk-container's
+      // update service exposes "what is the latest" but not "list all" — the
+      // latter belongs in the plugin (it knows which repo to ask). This is the
+      // only place mayara still talks to GitHub directly.
       router.get('/api/versions', async (_req: Request, res: Response) => {
-        try {
-          const ghRes = await fetch(
-            'https://api.github.com/repos/MarineYachtRadar/mayara-server/releases?per_page=10',
-            {
-              headers: { Accept: 'application/vnd.github+json' },
-              signal: AbortSignal.timeout(10000)
-            }
-          )
-          if (!ghRes.ok) {
-            res.status(502).json({ error: 'Failed to fetch releases' })
-            return
-          }
-          const releases = (await ghRes.json()) as {
+        const headers = { Accept: 'application/vnd.github+json' }
+        const repo = 'MarineYachtRadar/mayara-server'
+
+        const releasesP = fetch(`https://api.github.com/repos/${repo}/releases?per_page=10`, {
+          headers,
+          signal: AbortSignal.timeout(10000)
+        })
+        // PR test images (tag `pr<N>`) exist only for OPEN PRs carrying the
+        // `build-image` label; the server-side cleanup job deletes the image
+        // when the PR closes. So list open PRs and keep the labeled ones.
+        const pullsP = fetch(`https://api.github.com/repos/${repo}/pulls?state=open&per_page=30`, {
+          headers,
+          signal: AbortSignal.timeout(10000)
+        })
+
+        const [relSettled, pullSettled] = await Promise.allSettled([releasesP, pullsP])
+
+        const releases: { tag: string; prerelease: boolean }[] = []
+        if (relSettled.status === 'fulfilled' && relSettled.value.ok) {
+          const data = (await relSettled.value.json()) as {
             tag_name: string
             prerelease: boolean
             draft: boolean
           }[]
-          res.json(
-            releases
+          releases.push(
+            ...data
               .filter((r) => !r.draft && SAFE_TAG.test(r.tag_name))
               .map((r) => ({ tag: r.tag_name, prerelease: r.prerelease }))
           )
-        } catch (err) {
-          res.status(500).json({ error: errMsg(err) })
         }
+
+        const prImages: { tag: string; pr: number; title: string }[] = []
+        if (pullSettled.status === 'fulfilled' && pullSettled.value.ok) {
+          const pulls = (await pullSettled.value.json()) as {
+            number: number
+            title: string
+            labels: { name: string }[]
+          }[]
+          prImages.push(
+            ...pulls
+              .filter((p) => p.labels.some((l) => l.name === 'build-image'))
+              .map((p) => ({ tag: `pr${p.number}`, pr: p.number, title: p.title }))
+              .filter((p) => SAFE_TAG.test(p.tag))
+          )
+        }
+
+        // Both sources down → 502 so the panel keeps its prior dropdown
+        // (it ignores non-ok responses). One source down → degrade silently.
+        const relFailed = relSettled.status === 'rejected' || !relSettled.value.ok
+        const pullFailed = pullSettled.status === 'rejected' || !pullSettled.value.ok
+        if (relFailed && pullFailed) {
+          res.status(502).json({ error: 'Failed to fetch versions' })
+          return
+        }
+
+        res.json([...releases, ...prImages])
       })
     }
   }

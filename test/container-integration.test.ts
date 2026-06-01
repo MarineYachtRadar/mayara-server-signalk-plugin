@@ -719,6 +719,91 @@ describe('mayara-server-signalk-plugin container integration', () => {
     })
   })
 
+  describe('GET /api/versions', () => {
+    // The route does a real `fetch` against GitHub; stub it with a
+    // URL-discriminating implementation so each test controls both sources.
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+    function stubFetch(impl: (url: string) => Promise<unknown>) {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string) => impl(url))
+      )
+    }
+
+    const okJson = (body: unknown) =>
+      Promise.resolve({ ok: true, json: () => Promise.resolve(body) })
+
+    it('merges release tags and labeled open PRs, skipping unlabeled PRs', async () => {
+      stubFetch((url) => {
+        if (url.includes('/releases')) {
+          return okJson([
+            { tag_name: 'v3.4.0', prerelease: false, draft: false },
+            { tag_name: 'v3.5.0-rc1', prerelease: true, draft: false },
+            { tag_name: 'v3.3.0-draft', prerelease: false, draft: true }
+          ])
+        }
+        if (url.includes('/pulls')) {
+          return okJson([
+            { number: 123, title: 'Fix gain', labels: [{ name: 'build-image' }] },
+            { number: 99, title: 'WIP', labels: [] }
+          ])
+        }
+        return Promise.reject(new Error(`unexpected url: ${url}`))
+      })
+
+      const { router, plugin } = await loadPlugin()
+      const handler = getHandler(router, 'GET /api/versions')
+      const res = makeRes()
+      await handler({}, res)
+
+      expect(res.statusCode).toBe(200)
+      const body = res.body as { tag: string; prerelease?: boolean; pr?: number; title?: string }[]
+      expect(body).toContainEqual({ tag: 'v3.4.0', prerelease: false })
+      expect(body).toContainEqual({ tag: 'v3.5.0-rc1', prerelease: true })
+      expect(body).toContainEqual({ tag: 'pr123', pr: 123, title: 'Fix gain' })
+      // draft release filtered out
+      expect(body.some((v) => v.tag === 'v3.3.0-draft')).toBe(false)
+      // unlabeled PR filtered out
+      expect(body.some((v) => v.tag === 'pr99')).toBe(false)
+      await plugin.stop()
+    })
+
+    it('still returns releases when the PRs request fails (degrade, not fail)', async () => {
+      stubFetch((url) => {
+        if (url.includes('/releases')) {
+          return okJson([{ tag_name: 'v3.4.0', prerelease: false, draft: false }])
+        }
+        return Promise.reject(new Error('network down'))
+      })
+
+      const { router, plugin } = await loadPlugin()
+      const handler = getHandler(router, 'GET /api/versions')
+      const res = makeRes()
+      await handler({}, res)
+
+      expect(res.statusCode).toBe(200)
+      const body = res.body as { tag: string }[]
+      expect(body).toContainEqual({ tag: 'v3.4.0', prerelease: false })
+      expect(body.some((v) => v.tag.startsWith('pr'))).toBe(false)
+      await plugin.stop()
+    })
+
+    it('returns 502 when both sources are down', async () => {
+      stubFetch(() => Promise.resolve({ ok: false, json: () => Promise.resolve([]) }))
+
+      const { router, plugin } = await loadPlugin()
+      const handler = getHandler(router, 'GET /api/versions')
+      const res = makeRes()
+      await handler({}, res)
+
+      expect(res.statusCode).toBe(502)
+      await plugin.stop()
+    })
+  })
+
   describe('Signal K token integration', () => {
     it('starts in tcp: mode when no token is cached and request flow is disabled', async () => {
       const { containers, plugin } = await loadPlugin({ requestSignalkToken: false })
