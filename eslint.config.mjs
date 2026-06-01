@@ -28,6 +28,22 @@ export default tseslint.config(
     }
   },
   {
-    ignores: ['plugin/**', 'build.js', 'public/**', 'node_modules/**']
+    // Lint only the TypeScript sources in tsconfig.eslint.json (src + test).
+    // Everything else is outside the project, so the type-aware parser
+    // (parserOptions.project) errors on it — which is what a repo-wide
+    // `eslint .` (as CodeRabbit runs) hits on the root config files and the
+    // hand-written .js config panel (bundled by webpack, not compiled by tsc,
+    // and following its own JSX style). The lint script already globs only
+    // src/test *.ts; ignore the rest here so the two stay consistent.
+    ignores: [
+      'plugin/**',
+      'public/**',
+      'node_modules/**',
+      'src/configpanel/**/*.js',
+      'build.js',
+      '**/*.config.js',
+      '**/*.config.mjs',
+      '**/*.config.ts'
+    ]
   }
 )
