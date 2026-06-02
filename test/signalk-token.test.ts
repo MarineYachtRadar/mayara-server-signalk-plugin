@@ -15,7 +15,9 @@ vi.mock('https', () => ({ request: httpsRequestMock }))
 import {
   awaitApproval,
   beginTokenRequest,
+  deleteCachedToken,
   readCachedToken,
+  validateCachedToken,
   writeCachedToken
 } from '../src/signalk-token'
 
@@ -97,6 +99,52 @@ describe('signalk-token: cache helpers', () => {
       const mode = statSync(path).mode & 0o777
       expect(mode).toBe(0o600)
     }
+  })
+
+  it('deleteCachedToken removes the file and is a no-op when absent', () => {
+    const path = join(dataDir, 'signalk-token')
+    writeCachedToken(dataDir, 'eyJabc.def')
+    deleteCachedToken(dataDir)
+    expect(existsSync(path)).toBe(false)
+    // Second call must not throw.
+    expect(() => {
+      deleteCachedToken(dataDir)
+    }).not.toThrow()
+  })
+})
+
+describe('signalk-token: validateCachedToken', () => {
+  it('returns revoked on HTTP 401', async () => {
+    globalThis.fetch = vi.fn(() => Promise.resolve(makeFetchResponse(401, {})))
+    const state = await validateCachedToken({ token: 't', signalkPort: 3000, ssl: false })
+    expect(state).toBe('revoked')
+  })
+
+  it('returns revoked on HTTP 403', async () => {
+    globalThis.fetch = vi.fn(() => Promise.resolve(makeFetchResponse(403, {})))
+    const state = await validateCachedToken({ token: 't', signalkPort: 3000, ssl: false })
+    expect(state).toBe('revoked')
+  })
+
+  it('returns valid on HTTP 200 and sends the bearer token', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(makeFetchResponse(200, { mmsi: '123' })))
+    globalThis.fetch = fetchMock
+    const state = await validateCachedToken({ token: 'the-tok', signalkPort: 3000, ssl: false })
+    expect(state).toBe('valid')
+    const init = fetchMock.mock.calls[0][1] as RequestInit
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer the-tok')
+  })
+
+  it('returns unknown on a network error (keeps the cached token)', async () => {
+    globalThis.fetch = vi.fn(() => Promise.reject(new Error('ECONNREFUSED')))
+    const state = await validateCachedToken({ token: 't', signalkPort: 3000, ssl: false })
+    expect(state).toBe('unknown')
+  })
+
+  it('returns unknown on an unexpected status (e.g. 500)', async () => {
+    globalThis.fetch = vi.fn(() => Promise.resolve(makeFetchResponse(500, {})))
+    const state = await validateCachedToken({ token: 't', signalkPort: 3000, ssl: false })
+    expect(state).toBe('unknown')
   })
 })
 
