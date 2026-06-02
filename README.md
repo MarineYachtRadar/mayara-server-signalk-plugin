@@ -75,10 +75,12 @@ The plugin uses the standard Signal K device-access-request flow to obtain one. 
 
 1. **On first start**, the plugin POSTs a `readwrite` access request for `clientId = mayara-server-signalk-plugin`. The request appears in your admin UI under **Security → Access Requests** with description _"MaYaRa Radar (Server) — AIS overlay seeding + radar/target/notification writebacks"_.
 2. Plugin status changes to _"Awaiting Signal K token approval — see Security → Access Requests"_. Approve the request once. (Mayara may also push radar targets, MARPA tracks, and notifications back to Signal K in future releases — hence the `readwrite` scope.)
-3. The plugin caches the issued JWT to a `signalk-token` file in its plugin data directory (mode `0600`) — typically `~/.signalk/plugin-config-data/mayara-server-signalk-plugin/signalk-token` — and recreates the container with `-n ws:127.0.0.1:${PORT}` plus `--signalk-token-file /run/mayara/token`.
-4. Subsequent restarts reuse the cached token — no further admin interaction.
+3. The plugin caches the issued JWT to a `signalk-token` file in its plugin data directory (mode `0600`) — typically `~/.signalk/plugin-config-data/mayara-server-signalk-plugin/signalk-token` — and recreates the container with `-n ws:127.0.0.1:${PORT}` plus the token delivered through the `MAYARA_SIGNALK_TOKEN` environment variable. (The token is passed as an env var rather than a bind-mounted file because the container runs as a different UID than the Signal K host process, and env vars cross that boundary cleanly.)
+4. Subsequent restarts reuse the cached token. On start the plugin first validates it against Signal K; if it's still good there's no further admin interaction, and if it was revoked the plugin drops it and requests a fresh one automatically (see _Revoking access_ below).
 
-Until the request is approved (or if you deny it), the container runs with `-n tcp:127.0.0.1:${TCPSTREAMPORT}` instead. Navigation deltas still flow, only the initial AIS REST snapshot is skipped (the overlay then fills from live deltas as vessels are heard).
+Until the request is approved (or if you deny it), the container runs with `-n tcp:127.0.0.1:${TCPSTREAMPORT}` instead. Navigation deltas still flow, only the initial AIS REST snapshot is skipped (the overlay then fills from live deltas as vessels are heard). If the request is denied, device registration is disabled, or the request expires, the plugin keeps re-requesting on the reconnect interval — so approving (or enabling device registration) later is picked up without restarting the plugin.
+
+While the upstream connection is unauthenticated or hasn't delivered navigation yet, the radar GUI surfaces an on-screen status banner (e.g. _"Waiting for SignalK token approval"_ or _"SignalK navigation lost"_), so the cause of a missing position/AIS overlay is visible without digging through logs. That banner is implemented in mayara-server itself; see its documentation for details.
 
 **Settings:**
 
@@ -86,16 +88,10 @@ Until the request is approved (or if you deny it), the container runs with `-n t
 
 **Requirements:**
 
-- mayara-server image with the `--signalk-token-file` flag — present on `:main` and on releases newer than v3.5.1. If your `Image version` is `latest` and the most recent release is still ≤ v3.5.1, switch to `main` (or wait for the next release) to exercise the WS-with-token path. The token request itself works regardless of the mayara version.
-- Signal K's **Security → Settings → Allow New Device Registration** must remain enabled (it's on by default). If you've disabled it, the plugin's POST returns 403, the container stays on the TCP fallback, and plugin status surfaces a hint.
+- mayara-server image that accepts the token via the `MAYARA_SIGNALK_TOKEN` environment variable — present on `:main` and on releases newer than v3.5.1. If your `Image version` is `latest` and the most recent release is still ≤ v3.5.1, switch to `main` (or wait for the next release) to exercise the WS-with-token path. The token request itself works regardless of the mayara version.
+- Signal K's **Security → Settings → Allow New Device Registration** must remain enabled (it's on by default). If you've disabled it, the plugin's POST returns 403 and the container stays on the TCP fallback; plugin status surfaces a hint and it keeps re-requesting, so enabling registration later recovers without a restart.
 
-**Revoking access:** delete the device entry in **Security → Devices** (or **Security → Access Requests** if still listed there), then delete the plugin's cached token file:
-
-```bash
-rm ~/.signalk/plugin-config-data/mayara-server-signalk-plugin/signalk-token
-```
-
-Restart the plugin and it'll request a fresh token.
+**Revoking access:** delete the device entry in **Security → Devices** (or deny it under **Security → Access Requests**). That's all — no manual file cleanup needed. The plugin notices the cached token has been revoked, discards it, drops the container back to the unauthenticated TCP stream, and requests a fresh one. Approve the new request and the AIS overlay re-seeds automatically.
 
 ### Resource Limits
 
@@ -146,6 +142,7 @@ WebSocket streams to mayara-server, over both HTTP and HTTPS.
 - **Full Radar API**: Power, range, gain, sea/rain clutter, ARPA targets
 - **Binary spoke streaming**: Forwards protobuf spoke data via SignalK's binaryStreamManager
 - **Auto-reconnection**: Handles disconnections with configurable retry
+- **Resilient Signal K authentication**: Requests a device token automatically, validates the cached token on start, and re-requests without a restart if it's denied, revoked, or expires
 - **Centralized update detection**: Delegated to signalk-container's update service. Auto-detects semver vs floating tags, offline-tolerant with persistent cache, no direct shellouts.
 - **User-configurable resource limits**: Default caps on CPU, memory, and PIDs; per-field overrides via signalk-container's config.
 
