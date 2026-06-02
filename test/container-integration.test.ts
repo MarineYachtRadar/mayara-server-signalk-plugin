@@ -1093,6 +1093,74 @@ describe('mayara-server-signalk-plugin container integration', () => {
       expect(tokenModule.beginTokenRequest).not.toHaveBeenCalled()
       await plugin.stop()
     })
+
+    it('does not POST again when SK reports a request already pending', async () => {
+      const tokenModule = await loadTokenMock()
+      vi.mocked(tokenModule.beginTokenRequest).mockResolvedValue({
+        kind: 'already-pending'
+      })
+
+      const { plugin, app } = await loadPlugin({
+        requestSignalkToken: true,
+        reconnectInterval: 0.01
+      })
+      // It surfaces "awaiting approval" and waits — it does NOT call
+      // awaitApproval on a non-existent href, and recovery just re-checks.
+      expect(app.setPluginStatus).toHaveBeenCalledWith(
+        expect.stringContaining('Awaiting Signal K token approval')
+      )
+      expect(tokenModule.awaitApproval).not.toHaveBeenCalled()
+      await plugin.stop()
+    })
+
+    it('a token loop superseded by stop()+start() does not keep requesting', async () => {
+      const tokenModule = await loadTokenMock()
+      // The first loop opens a request and blocks in awaitApproval until its
+      // generation is cancelled — modelling an admin who hasn't approved yet.
+      vi.mocked(tokenModule.beginTokenRequest).mockResolvedValue({
+        kind: 'pending',
+        requestId: 'r-1',
+        href: '/signalk/v1/requests/r-1'
+      })
+      vi.mocked(tokenModule.awaitApproval).mockImplementation(
+        (_href, _port, isCancelled: () => boolean) =>
+          new Promise((resolve) => {
+            const timer = setInterval(() => {
+              if (isCancelled()) {
+                clearInterval(timer)
+                resolve(undefined)
+              }
+            }, 5)
+          })
+      )
+
+      const { plugin, app } = await loadPlugin({
+        requestSignalkToken: true,
+        reconnectInterval: 0.01
+      })
+
+      // Restart: stop() then start() bump the generation twice. The original
+      // loop's awaitApproval is now cancelled and must not resume/re-POST.
+      await plugin.stop()
+      const callsAfterRestart = vi.mocked(tokenModule.beginTokenRequest).mock.calls.length
+      plugin.start({
+        managedContainer: true,
+        mayaraVersion: 'latest',
+        mayaraArgs: [],
+        requestSignalkToken: false, // the new generation doesn't request
+        host: 'localhost',
+        port: 6502,
+        secure: false,
+        discoveryPollInterval: 10,
+        reconnectInterval: 5
+      })
+      await new Promise((resolve) => setTimeout(resolve, 80))
+
+      // The superseded loop exited rather than looping into more POSTs.
+      expect(vi.mocked(tokenModule.beginTokenRequest).mock.calls.length).toBe(callsAfterRestart)
+      void app
+      await plugin.stop()
+    })
   })
 
   describe('GUI reverse proxy mount', () => {

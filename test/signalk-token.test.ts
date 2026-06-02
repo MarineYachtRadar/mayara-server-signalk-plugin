@@ -184,6 +184,36 @@ describe('signalk-token: beginTokenRequest', () => {
     expect(result).toEqual({ kind: 'requests-disabled' })
   })
 
+  it('returns kind=already-pending on SK 400 "already requested"', async () => {
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve(
+        makeFetchResponse(400, {
+          message: "A device with clientId 'test' has already requested access"
+        })
+      )
+    )
+    const result = await beginTokenRequest({
+      dataDir,
+      signalkPort: 3000,
+      clientId: 'test',
+      description: 'test'
+    })
+    expect(result).toEqual({ kind: 'already-pending' })
+  })
+
+  it('returns kind=error on a 400 that is not the already-pending message', async () => {
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve(makeFetchResponse(400, { message: 'bad request' }))
+    )
+    const result = await beginTokenRequest({
+      dataDir,
+      signalkPort: 3000,
+      clientId: 'test',
+      description: 'test'
+    })
+    expect(result.kind).toBe('error')
+  })
+
   it('returns kind=pending with the href when SK accepts the request', async () => {
     globalThis.fetch = vi.fn(() =>
       Promise.resolve(

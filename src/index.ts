@@ -73,8 +73,14 @@ module.exports = function (app: MayaraServerAPI): Plugin {
   // how many radars are discovered.
   let notificationForwarder: NotificationForwarder | null = null
   let discoveryInterval: ReturnType<typeof setInterval> | null = null
-  // Set true on stop() so the in-flight token poller exits its loop.
-  let tokenPollerCancelled = false
+  // Monotonic generation for the token-acquisition loop. Bumped on every
+  // start() and stop(); each recovery loop captures the value at launch and
+  // treats itself as cancelled once it no longer matches. A boolean flag was
+  // insufficient: a fast stop()→start() reset it to false under an old
+  // in-flight loop, which then resumed and POSTed a duplicate access request
+  // alongside the new loop. A counter makes a superseded loop stay cancelled
+  // forever, so only one acquisition is ever live.
+  let tokenGeneration = 0
   let reconnectInterval: ReturnType<typeof setInterval> | null = null
   let isConnected = false
   // Appended to the "Connected" status line when a newer container image
@@ -104,10 +110,10 @@ module.exports = function (app: MayaraServerAPI): Plugin {
       // every field being present.
       const merged: Config = { ...SCHEMA_DEFAULTS, ...config }
       currentSettings = merged
-      // Reset the poller cancel flag so a stop/start cycle (config
-      // change, plugin disable/enable) lets the next start make a
-      // fresh token request.
-      tokenPollerCancelled = false
+      // New generation: supersedes any token loop left over from a prior
+      // start (a fast disable/enable or config save) so only the loop this
+      // start launches is live.
+      tokenGeneration++
       void asyncStart(merged).catch((err: unknown) => {
         app.setPluginError(`Startup failed: ${err instanceof Error ? err.message : String(err)}`)
       })
@@ -116,9 +122,10 @@ module.exports = function (app: MayaraServerAPI): Plugin {
     async stop() {
       app.debug('Stopping mayara-server-signalk-plugin')
 
-      // Tell any in-flight token poller to exit on its next tick so
-      // it doesn't keep the process alive after stop() returns.
-      tokenPollerCancelled = true
+      // Bump the generation so any in-flight token loop sees itself as
+      // superseded and exits on its next check, without keeping the process
+      // alive after stop() returns.
+      tokenGeneration++
 
       try {
         app.radarApi.unRegister(PLUGIN_ID)
@@ -745,7 +752,8 @@ module.exports = function (app: MayaraServerAPI): Plugin {
 
   async function ensureSignalkToken(
     containers: ContainerManagerApi,
-    tag: string
+    tag: string,
+    isCancelled: () => boolean = () => false
   ): Promise<TokenOutcome> {
     const dataDir = app.getDataDirPath()
 
@@ -816,6 +824,13 @@ module.exports = function (app: MayaraServerAPI): Plugin {
         )
         // Recoverable: the operator may enable device requests later.
         return 'retry'
+      case 'already-pending':
+        // A request for this clientId is already outstanding on SK (e.g. one
+        // left by a prior plugin instance). Don't POST another — wait and let
+        // the recovery loop re-check; once it's approved the token caches and
+        // the next pass returns 'done'.
+        app.setPluginStatus('Awaiting Signal K token approval — see Security → Access Requests')
+        return 'retry'
       case 'error':
         app.debug(`Signal K token request error: ${begin.message}`)
         return 'retry'
@@ -833,7 +848,7 @@ module.exports = function (app: MayaraServerAPI): Plugin {
     const token = await awaitApproval(
       begin.href,
       sk.port,
-      () => tokenPollerCancelled,
+      isCancelled,
       (msg) => {
         app.debug(msg)
       },
@@ -841,10 +856,10 @@ module.exports = function (app: MayaraServerAPI): Plugin {
       sk.scheme === 'https'
     )
     if (!token) {
-      // Denied, expired, or plugin stopped. Leave the container on its
-      // existing transport. If we weren't stopped, this is recoverable —
-      // the operator may approve a fresh request later.
-      if (tokenPollerCancelled) {
+      // Denied, expired, or superseded. Leave the container on its existing
+      // transport. If we weren't superseded, this is recoverable — the
+      // operator may approve a fresh request later.
+      if (isCancelled()) {
         return 'done'
       }
       app.setPluginStatus(
@@ -874,26 +889,31 @@ module.exports = function (app: MayaraServerAPI): Plugin {
    * approves the device request (or enables device access requests) later is
    * picked up without a plugin restart. Each attempt that returns `retry`
    * waits `recoveryMs` before the next, capped at `MAX_TOKEN_RECOVERY_ATTEMPTS`
-   * so a permanently-denied install doesn't poll forever. The shared
-   * `tokenPollerCancelled` flag (set by `stop()`) ends the loop promptly so it
-   * never outlives the plugin.
+   * so a permanently-denied install doesn't poll forever.
+   *
+   * The loop captures the token generation at launch and stops the moment a
+   * later start()/stop() supersedes it — guaranteeing exactly one live
+   * acquisition, so a fast restart can't leave two loops POSTing duplicate
+   * access requests.
    */
   async function ensureSignalkTokenWithRecovery(
     containers: ContainerManagerApi,
     tag: string,
     recoveryMs: number
   ): Promise<void> {
+    const myGeneration = tokenGeneration
+    const isCancelled = () => myGeneration !== tokenGeneration
     const MAX_TOKEN_RECOVERY_ATTEMPTS = 60
     for (let attempt = 0; attempt < MAX_TOKEN_RECOVERY_ATTEMPTS; attempt++) {
-      if (tokenPollerCancelled) {
+      if (isCancelled()) {
         return
       }
-      const outcome = await ensureSignalkToken(containers, tag)
+      const outcome = await ensureSignalkToken(containers, tag, isCancelled)
       if (outcome === 'done') {
         return
       }
-      // Recoverable failure: wait, then re-attempt — unless we were stopped
-      // while waiting.
+      // Recoverable failure: wait, then re-attempt — unless superseded while
+      // waiting (re-checked at the top of the loop).
       await new Promise<void>((resolve) => setTimeout(resolve, recoveryMs))
     }
     app.debug(

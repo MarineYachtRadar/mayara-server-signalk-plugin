@@ -86,6 +86,10 @@ export type EnsureResult =
   | { kind: 'no-security' }
   | { kind: 'requests-disabled' }
   | { kind: 'pending'; requestId: string; href: string }
+  // SK already has a PENDING request for this clientId (it rejects a second
+  // one with HTTP 400). Don't POST again — wait for the existing request to
+  // be approved or expire.
+  | { kind: 'already-pending' }
   | { kind: 'error'; message: string }
 
 export interface EnsureOptions {
@@ -240,6 +244,16 @@ export async function beginTokenRequest(opts: EnsureOptions): Promise<EnsureResu
   }
   if (res.status === 403) {
     return { kind: 'requests-disabled' }
+  }
+  if (res.status === 400) {
+    // SK rejects a second pending request for the same clientId with 400
+    // ("...has already requested access"). Treat as already-pending so the
+    // caller waits instead of erroring or POSTing again.
+    const reply = (await res.json().catch(() => undefined)) as { message?: string } | undefined
+    if (reply?.message?.includes('already requested')) {
+      return { kind: 'already-pending' }
+    }
+    return { kind: 'error', message: reply?.message ?? 'HTTP 400 from access-request endpoint' }
   }
   if (res.status !== 202 && res.status !== 200) {
     return { kind: 'error', message: `Unexpected HTTP ${res.status} from access-request endpoint` }
