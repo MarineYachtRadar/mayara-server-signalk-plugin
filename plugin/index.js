@@ -642,15 +642,34 @@ module.exports = function (app) {
     }
     async function ensureSignalkToken(containers, tag) {
         const dataDir = app.getDataDirPath();
-        if ((0, signalk_token_1.readCachedToken)(dataDir)) {
-            app.debug('Signal K token cached; container started with WS transport');
-            return 'done';
-        }
         // Derive scheme + port from the live SK config (same source of
         // truth as the nav transport) so a TLS-enabled server is reached
         // over https — its plain-HTTP listener 302-redirects and drops the
         // POST body, so http would never mint a token.
         const sk = resolveSignalkApi();
+        const cached = (0, signalk_token_1.readCachedToken)(dataDir);
+        if (cached) {
+            // A token on disk isn't necessarily still valid — the admin may have
+            // revoked it in Security → Access Requests. Validate before trusting
+            // it; if revoked, drop the cache and fall through to re-request so the
+            // recovery loop can pick up a fresh approval without a manual restart.
+            // `unknown` (SK still starting, network blip) keeps the cached token.
+            const state = await (0, signalk_token_1.validateCachedToken)({
+                token: cached,
+                signalkPort: sk.port,
+                ssl: sk.scheme === 'https'
+            });
+            if (state !== 'revoked') {
+                app.debug('Signal K token cached and still valid; container on WS transport');
+                return 'done';
+            }
+            app.debug('Cached Signal K token was revoked; dropping it and re-requesting');
+            (0, signalk_token_1.deleteCachedToken)(dataDir);
+            // The container is still running with the dead token in env; recreate
+            // it so it drops to tcp: until a new token is approved.
+            await containers.ensureRunning(CONTAINER_NAME, buildContainerConfig(tag));
+            app.setPluginStatus('Signal K token was revoked — re-requesting access');
+        }
         // Request `readwrite` so mayara can later push deltas back into SK
         // (radar targets, MARPA tracks, heading echoes, guard-zone
         // notifications). Today the token only reads the AIS REST snapshot,

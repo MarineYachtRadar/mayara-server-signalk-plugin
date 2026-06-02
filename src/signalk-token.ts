@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync, rmSync } from 'fs'
 import { join } from 'path'
 import { request as httpsRequest } from 'https'
 
@@ -37,12 +37,17 @@ interface JsonResponse {
 async function requestJson(
   method: 'GET' | 'POST',
   url: string,
-  body: string | undefined
+  body: string | undefined,
+  extraHeaders?: Record<string, string>
 ): Promise<JsonResponse> {
+  const headers: Record<string, string> = { ...extraHeaders }
+  if (body !== undefined) headers['Content-Type'] = 'application/json'
+  const hasHeaders = Object.keys(headers).length > 0
+
   if (!url.startsWith('https:')) {
     const res = await fetch(url, {
       method,
-      headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+      headers: hasHeaders ? headers : undefined,
       body
     })
     return { status: res.status, ok: res.ok, json: () => res.json() }
@@ -54,7 +59,7 @@ async function requestJson(
       {
         method,
         rejectUnauthorized: false,
-        headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined
+        headers: hasHeaders ? headers : undefined
       },
       (res) => {
         const chunks: Buffer[] = []
@@ -133,6 +138,47 @@ export function hasCachedToken(dataDir: string): boolean {
 export function writeCachedToken(dataDir: string, token: string): void {
   const path = join(dataDir, TOKEN_FILENAME)
   writeFileSync(path, token, { mode: 0o600 })
+}
+
+/** Remove the cached token (e.g. after the server revoked it). No-op if absent. */
+export function deleteCachedToken(dataDir: string): void {
+  rmSync(join(dataDir, TOKEN_FILENAME), { force: true })
+}
+
+export interface ValidateOptions {
+  token: string
+  signalkPort: number
+  ssl: boolean
+}
+
+/**
+ * Check whether a cached token is still accepted by the local Signal K
+ * server. Returns:
+ *   - `valid`   — the server accepted the bearer (HTTP 2xx)
+ *   - `revoked` — the server rejected it (HTTP 401/403): the admin revoked
+ *                 or it expired, so the cache should be dropped and re-requested
+ *   - `unknown` — could not tell (network error, SK still starting, other
+ *                 status). Treated as "keep using it" so a transient blip
+ *                 doesn't throw away a good token.
+ *
+ * Hits `/signalk/v1/api/vessels/self` — a read every approved device token
+ * may perform — over the same loopback transport the token flow uses.
+ */
+export async function validateCachedToken(
+  opts: ValidateOptions
+): Promise<'valid' | 'revoked' | 'unknown'> {
+  const scheme = opts.ssl ? 'https' : 'http'
+  const url = `${scheme}://127.0.0.1:${opts.signalkPort}/signalk/v1/api/vessels/self`
+  try {
+    const res = await requestJson('GET', url, undefined, {
+      Authorization: `Bearer ${opts.token}`
+    })
+    if (res.status === 401 || res.status === 403) return 'revoked'
+    if (res.ok) return 'valid'
+    return 'unknown'
+  } catch {
+    return 'unknown'
+  }
 }
 
 interface AccessRequestReply {

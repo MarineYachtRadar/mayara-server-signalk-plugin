@@ -56,6 +56,10 @@ vi.mock('../src/signalk-token', async () => {
     ...actual,
     readCachedToken: vi.fn(() => undefined),
     writeCachedToken: vi.fn(),
+    deleteCachedToken: vi.fn(),
+    // Default: a cached token (when present) validates fine, so existing
+    // tests are unaffected. Revocation tests override per-call.
+    validateCachedToken: vi.fn(() => Promise.resolve('valid' as const)),
     beginTokenRequest: vi.fn(() =>
       Promise.resolve({ kind: 'error' as const, message: 'stubbed in tests' })
     ),
@@ -370,6 +374,8 @@ beforeEach(async () => {
   const tokenModule = await loadTokenMock()
   vi.mocked(tokenModule.readCachedToken).mockReset().mockReturnValue(undefined)
   vi.mocked(tokenModule.writeCachedToken).mockReset()
+  vi.mocked(tokenModule.deleteCachedToken).mockReset()
+  vi.mocked(tokenModule.validateCachedToken).mockReset().mockResolvedValue('valid')
   vi.mocked(tokenModule.beginTokenRequest)
     .mockReset()
     .mockResolvedValue({ kind: 'error', message: 'stubbed in tests' })
@@ -1052,6 +1058,40 @@ describe('mayara-server-signalk-plugin container integration', () => {
       // No further attempts should accrue after stop() flips the cancel flag.
       await new Promise<void>((resolve) => setTimeout(resolve, 80))
       expect(vi.mocked(tokenModule.beginTokenRequest).mock.calls.length).toBe(countAfterStop)
+    })
+
+    it('drops a revoked cached token and re-requests', async () => {
+      const tokenModule = await loadTokenMock()
+      // A token is on disk, but the server has revoked it.
+      vi.mocked(tokenModule.readCachedToken).mockReturnValue('revoked-jwt')
+      vi.mocked(tokenModule.validateCachedToken).mockResolvedValue('revoked')
+      vi.mocked(tokenModule.beginTokenRequest).mockResolvedValue({
+        kind: 'pending',
+        requestId: 'r-1',
+        href: '/signalk/v1/requests/r-1'
+      })
+
+      const { plugin, app } = await loadPlugin({ requestSignalkToken: true })
+
+      // The dead token is dropped and a fresh request is issued rather than
+      // the plugin trusting the cache forever.
+      expect(tokenModule.deleteCachedToken).toHaveBeenCalledTimes(1)
+      expect(tokenModule.beginTokenRequest).toHaveBeenCalledTimes(1)
+      expect(app.setPluginStatus).toHaveBeenCalledWith(expect.stringContaining('revoked'))
+      await plugin.stop()
+    })
+
+    it('keeps a valid cached token without re-requesting', async () => {
+      const tokenModule = await loadTokenMock()
+      vi.mocked(tokenModule.readCachedToken).mockReturnValue('good-jwt')
+      vi.mocked(tokenModule.validateCachedToken).mockResolvedValue('valid')
+
+      const { plugin } = await loadPlugin({ requestSignalkToken: true })
+
+      // A still-valid token short-circuits: no delete, no new request.
+      expect(tokenModule.deleteCachedToken).not.toHaveBeenCalled()
+      expect(tokenModule.beginTokenRequest).not.toHaveBeenCalled()
+      await plugin.stop()
     })
   })
 
