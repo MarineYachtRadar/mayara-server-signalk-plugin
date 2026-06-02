@@ -131,7 +131,7 @@ The mayara GUI is proxied through Signal K at `/plugins/<id>/gui/` so only the S
 ## Dependencies
 
 - Signal K Server ≥ 2.24.0 (Radar API requirement)
-- signalk-container ≥ 1.6.0 (declared in `peerDependenciesMeta` as optional and in `signalk.requires`)
+- signalk-container ≥ 1.6.0 (declared in `signalk.requires`; intentionally **not** an npm `peerDependency`. It's a cross-plugin runtime dependency discovered at runtime via `globalThis.__signalk_containerManager` and installed through Signal K's appstore, not something npm should resolve. Declaring it as a peer made npm enforce the version range, which broke `@beta`/prerelease installs with ERESOLVE because npm excludes prereleases from plain `>=` ranges.)
 - Node ≥ engines floor in `package.json` (CI matrix tests Node 22 and 24)
 
 When bumping the Node engines floor, update **all** of: `package.json` engines, `package.json` `@types/node`, `.github/dependabot.yml` comment, and the README prerequisites line.
