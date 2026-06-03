@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const net_1 = require("net");
 const http_proxy_middleware_1 = require("http-proxy-middleware");
 const mayara_client_1 = require("./mayara-client");
+const gui_proxy_path_1 = require("./gui-proxy-path");
 const radar_provider_1 = require("./radar-provider");
 const spoke_forwarder_1 = require("./spoke-forwarder");
 const notification_forwarder_1 = require("./notification-forwarder");
@@ -191,11 +192,9 @@ module.exports = function (app) {
                 // before the middleware sees the request, so the proxy
                 // receives paths like `/` (for the GUI root) and
                 // `/signalk/v2/api/...` (for the WebSocket-emitting REST API).
-                // mayara-server serves its UI at `/gui/...` but its API +
-                // WebSockets at `/signalk/...` (and the bare `/signalk`
-                // discovery endpoint the GUI probes for mode detection). We
-                // need both classes of request to reach mayara, so prepend
-                // `/gui` ONLY for paths that aren't already under `/signalk`.
+                // mayara-server serves its UI at `/gui/...` but its API at
+                // `/signalk/...` and `/v2/...`. `rewriteGuiProxyPath` passes both
+                // API roots through and only prefixes genuine assets with `/gui`.
                 target: 'http://localhost:6502', // overridden by `router`
                 changeOrigin: true,
                 // Do NOT let the middleware auto-subscribe to the server's `upgrade`
@@ -209,7 +208,7 @@ module.exports = function (app) {
                 ws: false,
                 xfwd: true,
                 followRedirects: false,
-                pathRewrite: (path) => path === '/signalk' || path.startsWith('/signalk/') ? path : `/gui${path}`,
+                pathRewrite: gui_proxy_path_1.rewriteGuiProxyPath,
                 selfHandleResponse: true,
                 on: {
                     // Signal K mounts `express.json()` before the plugin router

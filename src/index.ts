@@ -9,6 +9,7 @@ import {
   type RequestHandler
 } from 'http-proxy-middleware'
 import { MayaraClient } from './mayara-client'
+import { rewriteGuiProxyPath } from './gui-proxy-path'
 import { createRadarProvider } from './radar-provider'
 import { SpokeForwarder } from './spoke-forwarder'
 import { NotificationForwarder } from './notification-forwarder'
@@ -225,11 +226,9 @@ module.exports = function (app: MayaraServerAPI): Plugin {
         // before the middleware sees the request, so the proxy
         // receives paths like `/` (for the GUI root) and
         // `/signalk/v2/api/...` (for the WebSocket-emitting REST API).
-        // mayara-server serves its UI at `/gui/...` but its API +
-        // WebSockets at `/signalk/...` (and the bare `/signalk`
-        // discovery endpoint the GUI probes for mode detection). We
-        // need both classes of request to reach mayara, so prepend
-        // `/gui` ONLY for paths that aren't already under `/signalk`.
+        // mayara-server serves its UI at `/gui/...` but its API at
+        // `/signalk/...` and `/v2/...`. `rewriteGuiProxyPath` passes both
+        // API roots through and only prefixes genuine assets with `/gui`.
         target: 'http://localhost:6502', // overridden by `router`
         changeOrigin: true,
         // Do NOT let the middleware auto-subscribe to the server's `upgrade`
@@ -243,8 +242,7 @@ module.exports = function (app: MayaraServerAPI): Plugin {
         ws: false,
         xfwd: true,
         followRedirects: false,
-        pathRewrite: (path) =>
-          path === '/signalk' || path.startsWith('/signalk/') ? path : `/gui${path}`,
+        pathRewrite: rewriteGuiProxyPath,
         selfHandleResponse: true,
         on: {
           // Signal K mounts `express.json()` before the plugin router
