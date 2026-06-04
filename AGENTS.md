@@ -9,7 +9,66 @@ This file is read by AI coding agents (Claude Code, Cursor, Codex, etc.) when wo
 - **Container mode** (default): manages the mayara-server container via the [signalk-container](https://github.com/dirkwa/signalk-container) plugin's API.
 - **External mode**: connects to a mayara-server running elsewhere (host/port).
 
-The plugin itself is a thin proxy: it registers as a Radar API provider, forwards control commands over HTTP, and pipes binary spoke data via Signal K's `binaryStreamManager`. All radar protocol handling lives in mayara-server.
+The plugin is a **thin proxy**: it registers as a Radar API provider, forwards control commands over HTTP, and pipes binary spoke data via Signal K's `binaryStreamManager`. **All radar protocol handling — discovery, model detection, ranges, status, ARPA — lives in mayara-server.** When something is missing or wrong at the radar level, the fix usually belongs in mayara-server, not here; the plugin's job is to pass mayara's view through faithfully (see "Radar status model" below).
+
+### Module map (`src/`)
+
+- `index.ts` — plugin lifecycle (`start` / `stop` / `asyncStart`), Express routes (`/status`, `/api/*`, GUI proxy), managed-container orchestration, radar discovery polling, and the Signal K token flow. The big file; everything is wired here.
+- `mayara-client.ts` — HTTP(S) client for mayara's `/signalk/v2/api/vessels/self/radars/*` (list, capabilities, controls, targets). No protocol logic, just request plumbing.
+- `radar-provider.ts` — implements `radar.RadarProviderMethods`, registered with the server via `app.radarApi.register(PLUGIN_ID, …)`. Translates Radar API calls into `MayaraClient` requests.
+- `spoke-forwarder.ts` — one per radar; a WebSocket client that pipes mayara's binary spoke stream into `app.binaryStreamManager.emitData('radars/<id>', buf)`. Reconnects with backoff.
+- `notification-forwarder.ts` — subscribes to `notifications.*` on mayara's Signal K **v1** stream and republishes the deltas upstream via `app.handleMessage()` (e.g. guard-zone alarms). Filters out non-notification paths.
+- `gui-proxy-path.ts` — the pure `rewriteGuiProxyPath` used by the GUI reverse proxy: `/signalk…` and `/v2…` pass straight through to mayara, everything else gets `/gui` prepended for the static asset server.
+- `signalk-token.ts` — the device-access-request flow (POST request, poll for approval, validate) plus token-cache file helpers.
+- `config/schema.ts` — `ConfigSchema` (the Admin-UI form) and `SCHEMA_DEFAULTS` (the runtime default merge — see the gotcha below).
+- `types.ts` — typed local mirrors of the cross-plugin APIs (signalk-container's `ContainerManagerApi`, the SK server surface the plugin uses).
+
+Each module has a matching `test/*.test.ts`; `test/container-integration.test.ts` carries the lifecycle/regression guards.
+
+## Radar status model (design intent)
+
+This section is **design guidance**, not a description of finished code. Most of it is implemented in [mayara-server](https://github.com/MarineYachtRadar/mayara-server) (Rust), not in this plugin — but it lives here because this is where the architecture gets brainstormed, and because the plugin must not undo the model on the way through. File:line references below point into the mayara-server tree unless they start with `src/` of this repo.
+
+### Principle: surface a radar early, never silently drop it
+
+A radar should appear on `/radars` as soon as it is **discovered**, not only once its model is recognised and its ranges have arrived. Today mayara's `get_active()` (`src/lib/radar/mod.rs:750-759`) filters on `ranges.len() > 0`, so a radar whose model ID isn't recognised — or whose capability report hasn't landed yet — **vanishes** from `/radars` even though `/radars/<id>` still responds. Users report this as "the radar answers on `/radars/xxxx` but isn't in the list." The cure is not to special-case the vanish (the old "IP address missing" surfacing, mayara PR #334, was a kludge for one instance of this) but to **report the radar with a status that explains why it isn't fully usable yet.**
+
+### Two orthogonal axes — do not conflate them
+
+A radar carries **two independent pieces of state.** Modelling them as one field is the mistake to avoid.
+
+**1. Lifecycle / health status.** What the radar _is_. Proposed shape (exact `Error` variants left open — they'll grow as hardware faults are decoded):
+
+```text
+Initializing { Locating, ModelDetecting } | Available | Error { HardwareError, SetupError, … }
+```
+
+Every non-`Available` state **carries a human-readable English explanation** that the GUI can show directly — few users read the error log, so the _why_ has to ride along with the status. Anchor the design in cases already in the code:
+
+- Raymarine self-test fault `0x0A` (`src/lib/brand/raymarine/report/quantum.rs`, mayara PR #335) → `Error { HardwareError }`, text along the lines of "self-test failure; no image will appear until it clears."
+- Model not recognised / ranges not yet arrived → `Initializing { ModelDetecting }`, **not** a disappearance.
+
+Kees has already catalogued ~20 distinct Navico hardware-error codes, so `Error` is expected to fan out.
+
+**2. Idle.** Whether _anyone is watching_. A radar is **idle** when it is powered but **no one is subscribed** to its data stream — there's no point spending CPU decoding spokes nobody consumes. Idle is **not** an error and must never be reported as one — it's a pure efficiency signal: mayara already drains the spoke socket but skips frame decode and blob detection while idle, saving ~1.5 cores on Furuno radars that spew spokes even in standby (issue #274). Idle composes with status on the orthogonal axis: an `Available` radar can be idle; an `Error` radar's idleness is irrelevant.
+
+The current predicate is narrow — `should_idle(power, receiver_count) = standby && receiver_count == 0` (`src/lib/radar/mod.rs:973`) — so today only a _standby_ radar with no viewers idles. The intent reaches further: a radar an MFD has put into **transmit** while nothing is subscribed to mayara is equally pointless to decode. Widening idle to cover the transmit-but-unwatched case is on the table, but only once the subscriber count is honest about ARPA (next two points) — otherwise widening it would make the bug below bite harder.
+
+### ARPA counts as a subscriber
+
+A radar with an **active ARPA / MARPA tracker is not idle**, even if no GUI is open. ARPA is a legitimate consumer of the spoke stream — if it's tracking targets, somebody (the autopilot, a guard zone, a plotter) cares about that radar. Do not treat "no WebSocket viewers" as "nobody is watching."
+
+### ⚠️ ARPA / idle gotcha — be careful here
+
+Idle is currently computed **only** from `message_tx.receiver_count()`, the spoke-broadcast WebSocket subscriber count (`src/lib/radar/mod.rs:464-471`). But **ARPA does not subscribe to that broadcast** — it receives pre-detected blobs over a _separate_ mpsc channel (`src/lib/radar/mod.rs:1743-1774`, fed into `src/lib/radar/target/manager.rs`). And the idle flag is exactly what **skips blob detection**.
+
+⇒ If ARPA is tracking targets while no GUI is connected, `receiver_count == 0` → the radar idles → blob detection stops → **ARPA silently dies.** Any idle predicate must fold in an active-tracker count (or equivalent "ARPA is running" signal) so an ARPA-tracked radar stays awake. This is the "code will need to be careful around that" case — get it wrong and ARPA breaks invisibly whenever the last viewer closes the GUI.
+
+### Plugin-side rule: pass status through, don't flatten it
+
+The plugin is a thin proxy, and today it **throws away** anything richer than power state. `radar-provider.ts` derives `status` solely from the `power` control (`transmit` / `standby` / `off`, `src/radar-provider.ts:33-34` and `src/radar-provider.ts:79-80`), and `getRadars()` just returns `Object.keys()` of mayara's response (`src/radar-provider.ts:12-20`). So a `status` / `idle` / `explanation` that mayara adds to its `/radars` JSON (`RadarApiV3` in `src/bin/mayara-server/web/signalk/v2.rs:177-205`) would be **dropped on the floor here.**
+
+When mayara grows the status model, this plugin must **forward the new fields verbatim** into the Radar API `RadarInfo` / `RadarState` it returns (including the English explanation) rather than re-deriving a lesser status from `power`. The point of surfacing status early is lost if the proxy collapses it back to three power states.
 
 ## Commands
 
@@ -97,9 +156,10 @@ The flow lives in `src/signalk-token.ts` + `ensureSignalkToken()` in `src/index.
 1. On start, POST `/signalk/v1/access/requests` with `clientId = mayara-server-signalk-plugin` and `permissions: 'readwrite'`. The broad scope is deliberate — SK admin UI cannot widen permissions post-approval, only revoke + re-request, and mayara's roadmap includes pushing radar targets / MARPA tracks / notifications back to Signal K.
 2. Until the admin approves in **Security → Access Requests**, the container runs with `-n tcp:127.0.0.1:${TCPSTREAMPORT}` so nav deltas still flow.
 3. On approval, `awaitApproval()` extracts the JWT, caches it to `${app.getDataDirPath()}/signalk-token` (mode `0600`, host-only), and recreates the container with `-n ws:127.0.0.1:${PORT}` plus `env.MAYARA_SIGNALK_TOKEN = <token>`. The token is delivered via env, not a bind-mounted file, because on docker / rootful podman signalk-container emits `--user 1000:1000` (the mayara image's USER) — and a 0600 file on the host owned by the SK process user would be unreadable from inside the container at that UID. Env vars cross the UID boundary unconditionally and `mayara-server` already accepts `MAYARA_SIGNALK_TOKEN` as an alternative to `--signalk-token-file` (see `mayara-server/src/lib/mod.rs:214-257`).
-4. `requestSignalkToken: false` in plugin config opts out entirely (manual `--signalk-token <token>` or `--signalk-token-file <path>` in `mayaraArgs` remains an escape hatch — and if the user passes `-n` in `mayaraArgs`, the plugin neither injects its default nor sets the token env, leaving the operator's config untouched).
+4. The flow is **resilient without a plugin restart**. On every start the cached token is validated against SK (`validateCachedToken()`) before reuse; a token that's been revoked, denied, or expired is discarded and a fresh request is issued automatically (`ensureSignalkTokenWithRecovery()` retries on the reconnect interval, and `connectAndDiscover()` re-enters the flow on a revocation mid-run). A monotonic `tokenGeneration` counter, captured at launch and compared on each step, cancels a stale recovery loop when `stop()`/`start()` cycles — so a recovery loop never outlives the plugin instance that started it. The duplicate-request guard treats an existing `PENDING` request as "already pending" rather than POSTing a second one on a fast restart.
+5. `requestSignalkToken: false` in plugin config opts out entirely (manual `--signalk-token <token>` or `--signalk-token-file <path>` in `mayaraArgs` remains an escape hatch — and if the user passes `-n` in `mayaraArgs`, the plugin neither injects its default nor sets the token env, leaving the operator's config untouched).
 
-Token-flow tests live in `test/signalk-token.test.ts` (module-level: cache helpers, POST branches, polling) and `test/container-integration.test.ts` (integration: opt-in/out, lifecycle, recreate-on-approval). The token module is mocked by default in container-integration tests so they don't issue stray HTTP requests against a non-existent local SK; token-flow tests override per-test via `vi.mocked()`. The `tokenPollerCancelled` flag in `start()`/`stop()` keeps the poller from outliving the plugin.
+Token-flow tests live in `test/signalk-token.test.ts` (module-level: cache helpers, POST branches, polling) and `test/container-integration.test.ts` (integration: opt-in/out, lifecycle, recreate-on-approval). The token module is mocked by default in container-integration tests so they don't issue stray HTTP requests against a non-existent local SK; token-flow tests override per-test via `vi.mocked()`. The `tokenGeneration` counter (bumped in `start()`/`stop()`, captured in `isCancelled()`) keeps a recovery loop from outliving the plugin instance that started it.
 
 ### Container user UID mapping
 
@@ -124,9 +184,9 @@ Test guard: "declares the mayara image in-image UID/GID for correct uid mapping"
 The mayara GUI is proxied through Signal K at `/plugins/<id>/gui/` so only the SK port needs to be open. The GUI's REST calls go through Express' `router.use('/gui', guiProxy)`, but its radar/state/spoke **WebSocket** upgrades fire at the Node HTTP-server level, so `registerWithRouter` installs a manual `upgrade` listener on `req.socket.server`. Two non-obvious traps live here:
 
 - **Match the server on `net.Server`, not `http.Server`.** With SSL enabled, Signal K's listener is an `https.Server`, which extends `tls.Server`/`net.Server` — **not** `http.Server`. An `instanceof http.Server` check silently fails under HTTPS, the listener is never installed, and every `wss://` upgrade hangs (radar display stuck on "Disconnected"). HTTP works, HTTPS doesn't — a classic SSL-only regression.
-- **Keep `ws: false` on `createProxyMiddleware`.** With `ws: true`, the middleware auto-subscribes its *own* upgrade handler to the server and the manual `guiProxy.upgrade()` call becomes a no-op (it guards on `wsInternalSubscribed`). The auto-handler sees the raw `/plugins/<id>/gui/signalk/...` URL, which `pathRewrite` can't strip the mount prefix from, so the upgrade reaches mayara at a bogus `/gui/...` path and 404s. The manual listener strips the prefix first, so it must be the one that runs.
+- **Keep `ws: false` on `createProxyMiddleware`.** With `ws: true`, the middleware auto-subscribes its _own_ upgrade handler to the server and the manual `guiProxy.upgrade()` call becomes a no-op (it guards on `wsInternalSubscribed`). The auto-handler sees the raw `/plugins/<id>/gui/signalk/...` URL, which `pathRewrite` can't strip the mount prefix from, so the upgrade reaches mayara at a bogus `/gui/...` path and 404s. The manual listener strips the prefix first, so it must be the one that runs.
 
-`pathRewrite` (extracted as the exported pure `rewriteGuiProxyPath`) passes both of mayara's API roots straight through — `/signalk/...` (including the bare `/signalk` discovery path the GUI probes for mode detection) and `/v2/...` (recordings + the debug panel, which mayara serves *without* a `/signalk` prefix). Everything else gets `/gui` prepended for the static asset server. The `/v2/` passthrough matters: without it, recordings/debug requests are mistaken for assets and 404 behind the Signal K proxy, even though they work in the standalone-direct GUI (no proxy involved). Unit-tested in `test/gui-proxy-path.test.ts`.
+`pathRewrite` (extracted as the exported pure `rewriteGuiProxyPath`) passes both of mayara's API roots straight through — `/signalk/...` (including the bare `/signalk` discovery path the GUI probes for mode detection) and `/v2/...` (recordings + the debug panel, which mayara serves _without_ a `/signalk` prefix). Everything else gets `/gui` prepended for the static asset server. The `/v2/` passthrough matters: without it, recordings/debug requests are mistaken for assets and 404 behind the Signal K proxy, even though they work in the standalone-direct GUI (no proxy involved). Unit-tested in `test/gui-proxy-path.test.ts`.
 
 ## Dependencies
 
