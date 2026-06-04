@@ -17,3 +17,4 @@ jobs:
     with:
       enable-armv7: false
       enable-signalk-integration: true
+      format-check-command: npm run format:check

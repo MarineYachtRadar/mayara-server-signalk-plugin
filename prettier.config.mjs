@@ -3,5 +3,6 @@ export default {
   singleQuote: true,
   trailingComma: 'none',
   printWidth: 100,
-  arrowParens: 'always'
+  arrowParens: 'always',
+  proseWrap: 'preserve'
 }

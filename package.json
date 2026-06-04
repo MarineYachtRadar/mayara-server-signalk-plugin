@@ -5,7 +5,9 @@
   "main": "plugin/index.js",
   "signalk-plugin-enabled-by-default": true,
   "scripts": {
-    "format": "prettier --write 'src/**/*.ts' 'test/**/*.ts' && eslint --fix 'src/**/*.ts' 'test/**/*.ts'",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" && eslint --fix 'src/**/*.ts' 'test/**/*.ts' && npm run format:other",
+    "format:other": "prettier --write \"**/*.md\" \"*.{json,yml,yaml,mjs,js}\" \".github/**/*.{yml,yaml}\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"**/*.md\" \"*.{json,yml,yaml,mjs,js}\" \".github/**/*.{yml,yaml}\"",
     "lint": "eslint 'src/**/*.ts' 'test/**/*.ts'",
     "build": "tsc && node build.js && webpack",
     "build:config": "webpack",
