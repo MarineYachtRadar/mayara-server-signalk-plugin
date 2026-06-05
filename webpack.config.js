@@ -1,43 +1,42 @@
-const path = require("path");
-const { ModuleFederationPlugin } = require("webpack").container;
-const packageJson = require("./package.json");
+const path = require('path')
+const { ModuleFederationPlugin } = require('webpack').container
+const packageJson = require('./package.json')
 
 module.exports = {
-  entry: "./src/configpanel/index",
-  mode: "production",
+  entry: './src/configpanel/index',
+  mode: 'production',
   output: {
-    path: path.resolve(__dirname, "public"),
-    clean: false,
+    path: path.resolve(__dirname, 'public'),
+    clean: false
   },
   module: {
     rules: [
       {
         test: /\.jsx?$/,
-        loader: "babel-loader",
+        loader: 'babel-loader',
         exclude: /node_modules/,
-        options: { presets: ["@babel/preset-react"] },
-      },
-    ],
+        options: { presets: ['@babel/preset-react'] }
+      }
+    ]
   },
   resolve: {
-    extensions: [".js", ".jsx"],
+    extensions: ['.js', '.jsx']
   },
   plugins: [
     new ModuleFederationPlugin({
-      name: packageJson.name.replace(/[-@/]/g, "_"),
+      name: packageJson.name.replace(/[-@/]/g, '_'),
       library: {
-        type: "var",
-        name: packageJson.name.replace(/[-@/]/g, "_"),
+        type: 'var',
+        name: packageJson.name.replace(/[-@/]/g, '_')
       },
-      filename: "remoteEntry.js",
+      filename: 'remoteEntry.js',
       exposes: {
-        "./PluginConfigurationPanel":
-          "./src/configpanel/PluginConfigurationPanel",
+        './PluginConfigurationPanel': './src/configpanel/PluginConfigurationPanel'
       },
       shared: {
-        react: { singleton: true, requiredVersion: "^19" },
-        "react-dom": { singleton: true, requiredVersion: "^19" },
-      },
-    }),
-  ],
-};
+        react: { singleton: true, requiredVersion: '^19' },
+        'react-dom': { singleton: true, requiredVersion: '^19' }
+      }
+    })
+  ]
+}
