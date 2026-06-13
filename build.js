@@ -42,6 +42,7 @@ function main() {
 <head>
   <meta charset="utf-8">
   <title>MaYaRa Radar</title>
+  <link rel="icon" type="image/png" href="assets/mayara_logo.png">
   <script>
     window.location.replace('/plugins/mayara-server-signalk-plugin/gui/');
   </script>
