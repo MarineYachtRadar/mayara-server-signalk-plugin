@@ -2,6 +2,46 @@ import { radar } from '@signalk/server-api'
 import { MayaraClient } from './mayara-client'
 import { MayaraServerAPI } from './types'
 
+// mayara serves its color legend inside /capabilities as `legend.pixels`, an array indexed by pixel
+// value where each entry is `{ color, type }`. Map it to the Radar API `LegendEntry[]` so consumers can
+// color spoke samples; the array index is the sample value, so each entry bounds itself to that value.
+function mapLegend(capabilities: Record<string, unknown>): radar.LegendEntry[] | undefined {
+  const legend = capabilities.legend as { pixels?: unknown } | undefined
+  const pixels = legend ? legend.pixels : undefined
+  if (!Array.isArray(pixels)) return undefined
+  const entries: radar.LegendEntry[] = []
+  pixels.forEach((pixel, index) => {
+    if (typeof pixel !== 'object' || pixel === null) return
+    const color = (pixel as { color?: unknown }).color
+    if (typeof color !== 'string') return
+    const type = (pixel as { type?: unknown }).type
+    entries.push({
+      color,
+      label: typeof type === 'string' ? type : `level ${index}`,
+      minValue: index,
+      maxValue: index
+    })
+  })
+  return entries.length > 0 ? entries : undefined
+}
+
+// Forward every control mayara reports (gain, sea, rain, range, mode, ...) rather than only gain, so the
+// discovery RadarInfo carries the full current control state mayara already returned. Each value is kept
+// as a RadarControlValue, preserving the auto flag where the radar reports one.
+function mapControls(controls: Record<string, unknown>): radar.RadarControls {
+  const out: Record<string, radar.RadarControlValue | { value: number }> = {}
+  for (const [id, entry] of Object.entries(controls)) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const value = (entry as { value?: unknown }).value
+    if (typeof value !== 'number') continue
+    const auto = (entry as { auto?: unknown }).auto
+    out[id] = typeof auto === 'boolean' ? { auto, value } : { value }
+  }
+  // A radar that reports no gain still gets a sane default, as before.
+  if (!('gain' in out)) out.gain = { auto: true, value: 50 }
+  return out as radar.RadarControls
+}
+
 export function createRadarProvider(
   client: MayaraClient,
   app: MayaraServerAPI
@@ -33,6 +73,8 @@ export function createRadarProvider(
         const status =
           powerCtrl?.value === 2 ? 'transmit' : powerCtrl?.value === 1 ? 'standby' : 'off'
 
+        const legend = mapLegend(capabilities)
+
         return {
           id: radarId,
           name:
@@ -46,12 +88,8 @@ export function createRadarProvider(
           spokesPerRevolution: Number(capabilities.spokesPerRevolution || 2048),
           maxSpokeLen: Number(capabilities.maxSpokeLength || 512),
           range: Number(rangeCtrl?.value ?? 1852),
-          controls: {
-            gain: (controls.gain as radar.RadarControlValue | undefined) ?? {
-              auto: true,
-              value: 50
-            }
-          }
+          controls: mapControls(controls),
+          ...(legend ? { legend } : {})
         }
       } catch (err) {
         debug(
