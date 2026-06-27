@@ -82,6 +82,45 @@ describe('createRadarProvider', () => {
     }
   })
 
+  it('getRadarInfo forwards the legend and the full control set', async () => {
+    const client = createMockClient({
+      getCapabilities: vi.fn().mockResolvedValue({
+        spokesPerRevolution: 2048,
+        maxSpokeLength: 1024,
+        legend: {
+          pixels: [
+            { color: '#00000000', type: 'normal' },
+            { color: '#0000ffff', type: 'normal' },
+            { color: '#ff0000ff', type: 'normal' },
+            { color: '#ff00ffff', type: 'dopplerApproaching' }
+          ]
+        }
+      }),
+      getControls: vi.fn().mockResolvedValue({
+        power: { value: 2 },
+        range: { value: 3000 },
+        gain: { auto: false, value: 50 },
+        sea: { auto: true, value: 30 },
+        rain: { value: 10 }
+      })
+    })
+    const provider = createRadarProvider(client, createMockApp())
+
+    const info = await provider.getRadarInfo('radar-0')
+    expect(info).not.toBeNull()
+    if (info) {
+      expect(info.legend).toEqual([
+        { color: '#00000000', label: 'normal', minValue: 0, maxValue: 0 },
+        { color: '#0000ffff', label: 'normal', minValue: 1, maxValue: 1 },
+        { color: '#ff0000ff', label: 'normal', minValue: 2, maxValue: 2 },
+        { color: '#ff00ffff', label: 'dopplerApproaching', minValue: 3, maxValue: 3 }
+      ])
+      expect(info.controls.gain).toEqual({ auto: false, value: 50 })
+      expect(info.controls.sea).toEqual({ auto: true, value: 30 })
+      expect(info.controls.rain).toEqual({ value: 10 })
+    }
+  })
+
   it('getRadarInfo returns null for unknown radar', async () => {
     const client = createMockClient()
     const provider = createRadarProvider(client, createMockApp())
