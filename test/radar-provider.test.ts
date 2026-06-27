@@ -121,6 +121,26 @@ describe('createRadarProvider', () => {
     }
   })
 
+  it('getRadarInfo defaults auto on gain and sea when mayara omits it', async () => {
+    const client = createMockClient({
+      getControls: vi.fn().mockResolvedValue({
+        power: { value: 2 },
+        gain: { value: 40 },
+        sea: { value: 20 },
+        rain: { value: 10 }
+      })
+    })
+    const provider = createRadarProvider(client, createMockApp())
+
+    const info = await provider.getRadarInfo('radar-0')
+    expect(info).not.toBeNull()
+    if (info) {
+      expect(info.controls.gain).toEqual({ auto: false, value: 40 })
+      expect(info.controls.sea).toEqual({ auto: false, value: 20 })
+      expect(info.controls.rain).toEqual({ value: 10 })
+    }
+  })
+
   it('getRadarInfo returns null for unknown radar', async () => {
     const client = createMockClient()
     const provider = createRadarProvider(client, createMockApp())

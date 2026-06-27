@@ -25,9 +25,14 @@ function mapLegend(capabilities: Record<string, unknown>): radar.LegendEntry[] |
   return entries.length > 0 ? entries : undefined
 }
 
+// The controls the Radar API types as auto-capable (RadarControlValue, a required boolean auto), as
+// opposed to value-only controls like rain. gain and sea must always carry a boolean auto.
+const AUTO_CAPABLE_CONTROLS = new Set(['gain', 'sea'])
+
 // Forward every control mayara reports (gain, sea, rain, range, mode, ...) rather than only gain, so the
-// discovery RadarInfo carries the full current control state mayara already returned. Each value is kept
-// as a RadarControlValue, preserving the auto flag where the radar reports one.
+// discovery RadarInfo carries the full current control state mayara already returned. The auto flag is
+// preserved where the radar reports one, and defaulted to false for the auto-capable controls (gain,
+// sea) when mayara omits it, so their required RadarControlValue shape always holds.
 function mapControls(controls: Record<string, unknown>): radar.RadarControls {
   const out: Record<string, radar.RadarControlValue | { value: number }> = {}
   for (const [id, entry] of Object.entries(controls)) {
@@ -35,7 +40,9 @@ function mapControls(controls: Record<string, unknown>): radar.RadarControls {
     const value = (entry as { value?: unknown }).value
     if (typeof value !== 'number') continue
     const auto = (entry as { auto?: unknown }).auto
-    out[id] = typeof auto === 'boolean' ? { auto, value } : { value }
+    if (typeof auto === 'boolean') out[id] = { auto, value }
+    else if (AUTO_CAPABLE_CONTROLS.has(id)) out[id] = { auto: false, value }
+    else out[id] = { value }
   }
   // A radar that reports no gain still gets a sane default, as before.
   if (!('gain' in out)) out.gain = { auto: true, value: 50 }
