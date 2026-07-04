@@ -1,6 +1,63 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.createRadarProvider = createRadarProvider;
+// mayara serves its color legend inside /capabilities as `legend.pixels`, an array indexed by pixel
+// value where each entry is `{ color, type }`. Map it to the Radar API `LegendEntry[]` so consumers can
+// color spoke samples; the array index is the sample value, so each entry bounds itself to that value.
+function mapLegend(capabilities) {
+    const legend = capabilities.legend;
+    const pixels = legend ? legend.pixels : undefined;
+    if (!Array.isArray(pixels))
+        return undefined;
+    const entries = [];
+    pixels.forEach((pixel, index) => {
+        if (typeof pixel !== 'object' || pixel === null)
+            return;
+        const color = pixel.color;
+        if (typeof color !== 'string')
+            return;
+        const type = pixel.type;
+        entries.push({
+            color,
+            label: typeof type === 'string' ? type : `level ${index}`,
+            minValue: index,
+            maxValue: index
+        });
+    });
+    return entries.length > 0 ? entries : undefined;
+}
+// The controls the Radar API types as auto-capable (RadarControlValue, a required boolean auto), as
+// opposed to value-only controls like rain. gain and sea must always carry a boolean auto.
+const AUTO_CAPABLE_CONTROLS = new Set(['gain', 'sea']);
+// Forward every control mayara reports (gain, sea, rain, range, mode, targetTrails, ...) rather than only
+// gain, so the discovery RadarInfo carries the full current control state mayara already returned. Values
+// pass through as-is: numbers for level controls, but also strings for enum/list controls (mayara serves
+// these as their label, e.g. targetTrails "Medium") and booleans for on/off controls. The auto flag is
+// preserved where the radar reports one, and defaulted to false for the auto-capable controls (gain, sea)
+// when mayara omits it — but only when their value is numeric, so a string-valued control never gets a
+// spurious auto stapled on. The SK RadarControls index signature has no slot for non-numeric values, so
+// the accumulator is widened and the final cast bridges to the API type.
+function mapControls(controls) {
+    const out = {};
+    for (const [id, entry] of Object.entries(controls)) {
+        if (typeof entry !== 'object' || entry === null)
+            continue;
+        if (!('value' in entry))
+            continue;
+        const value = entry.value;
+        const auto = entry.auto;
+        if (typeof value === 'number' && typeof auto === 'boolean')
+            out[id] = { auto, value };
+        else if (typeof value === 'number' && AUTO_CAPABLE_CONTROLS.has(id))
+            out[id] = { auto: false, value };
+        else
+            out[id] = { value };
+    }
+    // A radar that reports no gain still gets a sane default, as before.
+    if (!('gain' in out))
+        out.gain = { auto: true, value: 50 };
+    return out;
+}
 function createRadarProvider(client, app) {
     const debug = app.debug.bind(app);
     return {
@@ -25,6 +82,7 @@ function createRadarProvider(client, app) {
                 const powerCtrl = controls.power;
                 const rangeCtrl = controls.range;
                 const status = powerCtrl?.value === 2 ? 'transmit' : powerCtrl?.value === 1 ? 'standby' : 'off';
+                const legend = mapLegend(capabilities);
                 return {
                     id: radarId,
                     name: typeof radarEntry.name === 'string'
@@ -37,12 +95,8 @@ function createRadarProvider(client, app) {
                     spokesPerRevolution: Number(capabilities.spokesPerRevolution || 2048),
                     maxSpokeLen: Number(capabilities.maxSpokeLength || 512),
                     range: Number(rangeCtrl?.value ?? 1852),
-                    controls: {
-                        gain: controls.gain ?? {
-                            auto: true,
-                            value: 50
-                        }
-                    }
+                    controls: mapControls(controls),
+                    ...(legend ? { legend } : {})
                 };
             }
             catch (err) {
