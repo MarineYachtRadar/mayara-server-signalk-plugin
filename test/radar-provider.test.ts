@@ -101,7 +101,12 @@ describe('createRadarProvider', () => {
         range: { value: 3000 },
         gain: { auto: false, value: 50 },
         sea: { auto: true, value: 30 },
-        rain: { value: 10 }
+        rain: { value: 10 },
+        // mayara serves enum/list controls as their label string, not a number.
+        targetTrails: { value: 'Medium' },
+        mode: { value: 'dopplerNormal' },
+        // and on/off controls as booleans.
+        interferenceRejection: { value: true }
       })
     })
     const provider = createRadarProvider(client, createMockApp())
@@ -118,6 +123,30 @@ describe('createRadarProvider', () => {
       expect(info.controls.gain).toEqual({ auto: false, value: 50 })
       expect(info.controls.sea).toEqual({ auto: true, value: 30 })
       expect(info.controls.rain).toEqual({ value: 10 })
+      // Non-numeric controls pass through verbatim instead of being dropped.
+      expect(info.controls.targetTrails).toEqual({ value: 'Medium' })
+      expect(info.controls.mode).toEqual({ value: 'dopplerNormal' })
+      expect(info.controls.interferenceRejection).toEqual({ value: true })
+    }
+  })
+
+  it('getRadarInfo does not staple auto onto a string-valued auto-capable control', async () => {
+    const client = createMockClient({
+      getControls: vi.fn().mockResolvedValue({
+        power: { value: 2 },
+        gain: { value: 40 },
+        // A radar that reports sea as an enum ("Off"/"Harbour"/...) rather than a level:
+        // it must forward as-is, never gain a spurious { auto: false }.
+        sea: { value: 'Harbour' }
+      })
+    })
+    const provider = createRadarProvider(client, createMockApp())
+
+    const info = await provider.getRadarInfo('radar-0')
+    expect(info).not.toBeNull()
+    if (info) {
+      expect(info.controls.gain).toEqual({ auto: false, value: 40 })
+      expect(info.controls.sea).toEqual({ value: 'Harbour' })
     }
   })
 
