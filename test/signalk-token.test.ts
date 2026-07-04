@@ -17,6 +17,7 @@ import {
   beginTokenRequest,
   deleteCachedToken,
   readCachedToken,
+  readGithubToken,
   validateCachedToken,
   writeCachedToken
 } from '../src/signalk-token'
@@ -110,6 +111,66 @@ describe('signalk-token: cache helpers', () => {
     expect(() => {
       deleteCachedToken(dataDir)
     }).not.toThrow()
+  })
+})
+
+describe('signalk-token: readGithubToken', () => {
+  // CI injects GITHUB_TOKEN; isolate the env so these cases are
+  // deterministic regardless of the runner, and restore it afterward.
+  let savedGithubToken: string | undefined
+  let savedGhToken: string | undefined
+  beforeEach(() => {
+    savedGithubToken = process.env.GITHUB_TOKEN
+    savedGhToken = process.env.GH_TOKEN
+    delete process.env.GITHUB_TOKEN
+    delete process.env.GH_TOKEN
+  })
+  afterEach(() => {
+    if (savedGithubToken === undefined) delete process.env.GITHUB_TOKEN
+    else process.env.GITHUB_TOKEN = savedGithubToken
+    if (savedGhToken === undefined) delete process.env.GH_TOKEN
+    else process.env.GH_TOKEN = savedGhToken
+  })
+
+  it('returns undefined when nothing is set', () => {
+    expect(readGithubToken(dataDir)).toBeUndefined()
+  })
+
+  it('prefers GITHUB_TOKEN over GH_TOKEN and over the file', () => {
+    process.env.GITHUB_TOKEN = 'from-github-env'
+    process.env.GH_TOKEN = 'from-gh-env'
+    writeFileSync(join(dataDir, 'github-token'), 'from-file')
+    expect(readGithubToken(dataDir)).toBe('from-github-env')
+  })
+
+  it('falls back to GH_TOKEN when GITHUB_TOKEN is unset', () => {
+    process.env.GH_TOKEN = 'from-gh-env'
+    writeFileSync(join(dataDir, 'github-token'), 'from-file')
+    expect(readGithubToken(dataDir)).toBe('from-gh-env')
+  })
+
+  it('falls back to GH_TOKEN when GITHUB_TOKEN is whitespace-only (not masked)', () => {
+    // A whitespace-only GITHUB_TOKEN must not short-circuit the fallback
+    // and silently revert to unauthenticated — that would re-expose the
+    // rate-limit exhaustion this token exists to cure.
+    process.env.GITHUB_TOKEN = '   '
+    process.env.GH_TOKEN = 'valid-gh-token'
+    expect(readGithubToken(dataDir)).toBe('valid-gh-token')
+  })
+
+  it('reads the github-token file when no env var is set', () => {
+    writeFileSync(join(dataDir, 'github-token'), '  ghp_fromfile\n')
+    expect(readGithubToken(dataDir)).toBe('ghp_fromfile')
+  })
+
+  it('trims env whitespace', () => {
+    process.env.GITHUB_TOKEN = '  ghp_padded  '
+    expect(readGithubToken(dataDir)).toBe('ghp_padded')
+  })
+
+  it('treats an empty/whitespace file as absent', () => {
+    writeFileSync(join(dataDir, 'github-token'), '   \n')
+    expect(readGithubToken(dataDir)).toBeUndefined()
   })
 })
 

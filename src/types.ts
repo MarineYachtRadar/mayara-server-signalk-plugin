@@ -139,7 +139,14 @@ export interface UpdateServiceApi {
   sources: {
     githubReleases: (
       repo: string,
-      options?: { allowPrerelease?: boolean; tagPrefix?: string }
+      options?: {
+        allowPrerelease?: boolean
+        tagPrefix?: string
+        // Optional GitHub token (Authorization: Bearer) — lifts the REST
+        // rate limit from 60 to 5000 req/hr per IP, so the update check
+        // doesn't 403/429 on a boat sharing a WAN IP.
+        token?: string
+      }
     ) => VersionSource
     dockerHubTags: (image: string, options?: { filter?: (tag: string) => boolean }) => VersionSource
   }

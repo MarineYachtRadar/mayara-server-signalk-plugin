@@ -3,6 +3,7 @@ import { join } from 'path'
 import { request as httpsRequest } from 'https'
 
 const TOKEN_FILENAME = 'signalk-token'
+const GITHUB_TOKEN_FILENAME = 'github-token'
 const POLL_INTERVAL_MS = 5_000
 
 /** Minimal response shape both transports below resolve to. */
@@ -114,6 +115,35 @@ export interface EnsureOptions {
  */
 export function readCachedToken(dataDir: string): string | undefined {
   const path = join(dataDir, TOKEN_FILENAME)
+  if (!existsSync(path)) return undefined
+  const raw = readFileSync(path, 'utf8').trim()
+  return raw.length > 0 ? raw : undefined
+}
+
+/**
+ * Read an OPTIONAL GitHub token for the version-list endpoint's REST
+ * calls. Unauthenticated GitHub REST is capped at 60 requests/hour per
+ * IP; a boat sharing a WAN IP with other GitHub-polling plugins can
+ * exhaust that, which hides the PR test images from the version dropdown.
+ * A token raises the cap to 5000/hour and cures the exhaustion.
+ *
+ * The token is optional — absent, the calls stay unauthenticated (no
+ * regression) — and is NOT a user-facing config field. Sources, first
+ * hit wins: `GITHUB_TOKEN`, then `GH_TOKEN`, then a host-only
+ * `${dataDir}/github-token` file (same private per-instance dir as the
+ * Signal K token). It is read plugin-side only (Node in the SK process)
+ * and never handed to the container, so the container-UID readability
+ * concern that forces the SK token through an env var does not apply — a
+ * host 0600 file is fine. A fine-grained PAT with public-repo read is
+ * enough since the repo is public; even a zero-scope token lifts the cap.
+ */
+export function readGithubToken(dataDir: string): string | undefined {
+  // Trim each source independently so a whitespace-only GITHUB_TOKEN does
+  // not short-circuit the `||` before GH_TOKEN is consulted (which would
+  // silently revert to unauthenticated despite a valid GH_TOKEN).
+  const env = (process.env.GITHUB_TOKEN ?? '').trim() || (process.env.GH_TOKEN ?? '').trim()
+  if (env.length > 0) return env
+  const path = join(dataDir, GITHUB_TOKEN_FILENAME)
   if (!existsSync(path)) return undefined
   const raw = readFileSync(path, 'utf8').trim()
   return raw.length > 0 ? raw : undefined

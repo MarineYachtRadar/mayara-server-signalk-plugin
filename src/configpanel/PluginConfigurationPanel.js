@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
+import { deriveVersionsView, runningTagFallback, splitVersions } from "./versionsView";
 
 const S = {
   root: {
@@ -243,6 +244,7 @@ export default function PluginConfigurationPanel({ configuration, save }) {
 
   const [versions, setVersions] = useState([]);
   const [versionsLoading, setVersionsLoading] = useState(false);
+  const [versionsError, setVersionsError] = useState("");
   const [pluginStatus, setPluginStatus] = useState(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [actionStatus, setActionStatus] = useState("");
@@ -254,8 +256,17 @@ export default function PluginConfigurationPanel({ configuration, save }) {
     setVersionsLoading(true);
     try {
       const res = await fetch("/plugins/mayara-server-signalk-plugin/api/versions");
-      if (res.ok) setVersions(await res.json());
-    } catch { /* offline */ }
+      const body = res.ok ? await res.json() : null;
+      // deriveVersionsView (unit-tested in test/versionsView.test.ts)
+      // decides the list + error line from the response; a null list on a
+      // 502 means "keep the prior dropdown rather than wipe it".
+      const view = deriveVersionsView(res.ok, body);
+      if (view.versions !== null) setVersions(view.versions);
+      setVersionsError(view.versionsError);
+    } catch {
+      // Offline: preserve whatever is already shown.
+      setVersionsError("⚠ Offline — showing last known versions");
+    }
     setVersionsLoading(false);
   }, []);
 
@@ -373,12 +384,17 @@ export default function PluginConfigurationPanel({ configuration, save }) {
     ? false  // PR test images and floating "latest" aren't version-compared
     : versions.length > 0 && !versions.some((v) => v.tag === mayaraVersion);
 
-  // PR test images carry a `pr` number (no `prerelease`); split them out so
-  // they aren't misclassified as stable releases.
-  const prVersions = versions.filter((v) => typeof v.pr === "number");
-  const releaseVersions = versions.filter((v) => typeof v.pr !== "number");
-  const stableVersions = releaseVersions.filter((v) => !v.prerelease).slice(0, 5);
-  const preVersions = releaseVersions.filter((v) => v.prerelease).slice(0, 3);
+  // The rendered option buckets. splitVersions is the shared source of the
+  // slice limits, so shownTags/runningTagFallback can never disagree with
+  // what these <optgroup>s actually render.
+  const { prVersions, stableVersions, preVersions } = splitVersions(versions);
+
+  // When the running image's tag isn't among the rendered options — e.g. a
+  // pr<N> whose /pulls fetch was rate-limited, or a stable pin that fell out
+  // of the top-N — inject a synthetic option so the controlled <select>
+  // never renders blank and silently resets the operator's real running
+  // image. runningTagFallback is unit-tested in test/versionsView.test.ts.
+  const runningFallbackTag = runningTagFallback(mayaraVersion, versions);
 
   return (
     <div style={S.root}>
@@ -466,6 +482,9 @@ export default function PluginConfigurationPanel({ configuration, save }) {
                   ))}
                 </optgroup>
               )}
+              {runningFallbackTag && (
+                <option value={runningFallbackTag}>{runningFallbackTag} (running)</option>
+              )}
             </select>
             {versionsLoading && <span style={S.hint}>loading...</span>}
             <button
@@ -492,6 +511,13 @@ export default function PluginConfigurationPanel({ configuration, save }) {
               </>
             )}
           </div>
+
+          {versionsError && (
+            <div style={S.fieldRow}>
+              <span style={S.label} />
+              <span style={{ ...S.hint, color: "#ef4444" }}>{versionsError}</span>
+            </div>
+          )}
 
           <CollapsibleSection title="Advanced">
             <div style={S.fieldRow}>

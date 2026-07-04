@@ -25,6 +25,7 @@ import {
   beginTokenRequest,
   deleteCachedToken,
   readCachedToken,
+  readGithubToken,
   validateCachedToken,
   writeCachedToken
 } from './signalk-token'
@@ -498,20 +499,41 @@ module.exports = function (app: MayaraServerAPI): Plugin {
       // latter belongs in the plugin (it knows which repo to ask). This is the
       // only place mayara still talks to GitHub directly.
       router.get('/api/versions', async (_req: Request, res: Response) => {
-        const headers = { Accept: 'application/vnd.github+json' }
+        // Authenticate the GitHub calls when a token is available. The
+        // unauthenticated limit is 60 req/hr per IP; a boat sharing a WAN
+        // IP exhausts it and the PR test images vanish from the dropdown.
+        // A token lifts the cap to 5000/hr. Optional — absent, the calls
+        // stay unauthenticated (no regression). Both fetches share this
+        // one object, so a single conditional authenticates both.
+        const ghToken = readGithubToken(app.getDataDirPath())
         const repo = 'MarineYachtRadar/mayara-server'
 
-        const releasesP = fetch(`https://api.github.com/repos/${repo}/releases?per_page=10`, {
-          headers,
-          signal: AbortSignal.timeout(10000)
-        })
+        // Fetch a GitHub path, authenticated when a token is available. A
+        // token lifts the rate limit from 60 to 5000 req/hr per IP, curing
+        // the shared-WAN-IP exhaustion that hides the PR test images. If a
+        // present token is rejected (401), retry once WITHOUT it: a bad or
+        // expired token must never be worse than no token — the same
+        // unauthenticated call would have succeeded.
+        const ghFetch = async (url: string): Promise<globalThis.Response> => {
+          const headers: Record<string, string> = {
+            Accept: 'application/vnd.github+json'
+          }
+          if (ghToken) headers.Authorization = `Bearer ${ghToken}`
+          const ghRes = await fetch(url, { headers, signal: AbortSignal.timeout(10000) })
+          if (ghRes.status === 401 && ghToken) {
+            return fetch(url, {
+              headers: { Accept: 'application/vnd.github+json' },
+              signal: AbortSignal.timeout(10000)
+            })
+          }
+          return ghRes
+        }
+
+        const releasesP = ghFetch(`https://api.github.com/repos/${repo}/releases?per_page=10`)
         // PR test images (tag `pr<N>`) exist only for OPEN PRs carrying the
         // `build-image` label; the server-side cleanup job deletes the image
         // when the PR closes. So list open PRs and keep the labeled ones.
-        const pullsP = fetch(`https://api.github.com/repos/${repo}/pulls?state=open&per_page=30`, {
-          headers,
-          signal: AbortSignal.timeout(10000)
-        })
+        const pullsP = ghFetch(`https://api.github.com/repos/${repo}/pulls?state=open&per_page=30`)
 
         const [relSettled, pullSettled] = await Promise.allSettled([releasesP, pullsP])
 
@@ -544,16 +566,54 @@ module.exports = function (app: MayaraServerAPI): Plugin {
           )
         }
 
-        // Both sources down → 502 so the panel keeps its prior dropdown
-        // (it ignores non-ok responses). One source down → degrade silently.
-        const relFailed = relSettled.status === 'rejected' || !relSettled.value.ok
-        const pullFailed = pullSettled.status === 'rejected' || !pullSettled.value.ok
-        if (relFailed && pullFailed) {
-          res.status(502).json({ error: 'Failed to fetch versions' })
+        // Classify each source so a rate-limited/failed one is RECORDED
+        // rather than silently dropped: releases-ok + pulls-rate-limited
+        // used to return the release list with the PR images gone and no
+        // signal, so the panel could not tell "no PR images exist" from
+        // "couldn't fetch them". Read the rate-limit response headers
+        // (previously discarded) to distinguish throttling from a generic
+        // error. Typed against a minimal structural shape (headers may be
+        // absent) so the optional access is legitimate, not just a cast of
+        // the DOM Response — a header-less response never throws.
+        type ClassifiableResponse = {
+          ok: boolean
+          status: number
+          headers?: { get?: (name: string) => string | null }
+        }
+        const classify = (
+          settled: PromiseSettledResult<ClassifiableResponse>
+        ): 'ok' | 'rate-limited' | 'error' => {
+          if (settled.status !== 'fulfilled') return 'error'
+          const r = settled.value
+          if (r.ok) return 'ok'
+          // Both GitHub rate limits reply 403 or 429. The PRIMARY limit
+          // sets x-ratelimit-remaining: 0; the SECONDARY (abuse) limit —
+          // the one a shared WAN IP trips — may instead send Retry-After
+          // with no remaining:0. Recognize either so the panel reports a
+          // retryable limit rather than a generic error.
+          if (r.status === 403 || r.status === 429) {
+            const remaining = r.headers?.get?.('x-ratelimit-remaining')
+            const retryAfter = r.headers?.get?.('retry-after')
+            if (remaining === '0' || (retryAfter !== null && retryAfter !== undefined)) {
+              return 'rate-limited'
+            }
+          }
+          return 'error'
+        }
+        const relStatus = classify(relSettled)
+        const pullStatus = classify(pullSettled)
+        const sources = { releases: relStatus, prImages: pullStatus }
+
+        // 502 only when BOTH sources failed — the panel then keeps its
+        // prior dropdown. Partial success is still success: return
+        // whatever loaded plus the per-source status so the panel can say
+        // which source (and why) is missing.
+        if (relStatus !== 'ok' && pullStatus !== 'ok') {
+          res.status(502).json({ error: 'Failed to fetch versions', sources })
           return
         }
 
-        res.json([...releases, ...prImages])
+        res.json({ versions: [...releases, ...prImages], sources })
       })
     }
   }
@@ -1001,7 +1061,13 @@ module.exports = function (app: MayaraServerAPI): Plugin {
         // Function, not value: picks up live edits to the version
         // setting without requiring a re-register.
         currentTag: () => currentSettings?.mayaraVersion ?? 'latest',
-        versionSource: containers.updates.sources.githubReleases('MarineYachtRadar/mayara-server')
+        // Authenticate the update check's GitHub calls when a token is
+        // available — same optional token as /api/versions. Without it,
+        // the unauthenticated 60/hr limit (or GitHub's stickier 429
+        // secondary limit on a shared WAN IP) makes "Check" fail.
+        versionSource: containers.updates.sources.githubReleases('MarineYachtRadar/mayara-server', {
+          token: readGithubToken(app.getDataDirPath())
+        })
       })
       app.debug('Registered with signalk-container update service')
     } catch (err) {
