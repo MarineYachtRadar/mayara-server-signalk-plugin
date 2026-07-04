@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { readFileSync } from 'fs'
+import { readFileSync, rmSync } from 'fs'
 import { join } from 'path'
 import type {
   ContainerConfig,
@@ -530,10 +530,46 @@ describe('mayara-server-signalk-plugin container integration', () => {
 
     it('uses githubReleases source pointing at MarineYachtRadar/mayara-server', async () => {
       const { containers, plugin } = await loadPlugin()
-      expect(containers.updates.sources.githubReleases).toHaveBeenCalledWith(
-        'MarineYachtRadar/mayara-server'
-      )
+      const call = vi.mocked(containers.updates.sources.githubReleases).mock.calls[0]
+      expect(call[0]).toBe('MarineYachtRadar/mayara-server')
+      // Second arg is the options object carrying the (optional) token.
+      expect(call[1]).toHaveProperty('token')
       await plugin.stop()
+    })
+
+    it('passes the GitHub token into the update source when one is available', async () => {
+      const saved = process.env.GITHUB_TOKEN
+      process.env.GITHUB_TOKEN = 'ghp_update_test'
+      try {
+        const { containers, plugin } = await loadPlugin()
+        expect(containers.updates.sources.githubReleases).toHaveBeenCalledWith(
+          'MarineYachtRadar/mayara-server',
+          { token: 'ghp_update_test' }
+        )
+        await plugin.stop()
+      } finally {
+        if (saved === undefined) delete process.env.GITHUB_TOKEN
+        else process.env.GITHUB_TOKEN = saved
+      }
+    })
+
+    it('passes token undefined (unauthenticated, no regression) when none is available', async () => {
+      const savedGithub = process.env.GITHUB_TOKEN
+      const savedGh = process.env.GH_TOKEN
+      delete process.env.GITHUB_TOKEN
+      delete process.env.GH_TOKEN
+      rmSync(join('/tmp/mayara-test', 'github-token'), { force: true })
+      try {
+        const { containers, plugin } = await loadPlugin()
+        expect(containers.updates.sources.githubReleases).toHaveBeenCalledWith(
+          'MarineYachtRadar/mayara-server',
+          { token: undefined }
+        )
+        await plugin.stop()
+      } finally {
+        if (savedGithub !== undefined) process.env.GITHUB_TOKEN = savedGithub
+        if (savedGh !== undefined) process.env.GH_TOKEN = savedGh
+      }
     })
 
     it('currentTag is a function that reads live config', async () => {
@@ -728,19 +764,64 @@ describe('mayara-server-signalk-plugin container integration', () => {
   describe('GET /api/versions', () => {
     // The route does a real `fetch` against GitHub; stub it with a
     // URL-discriminating implementation so each test controls both sources.
+    // CI (GitHub Actions) injects GITHUB_TOKEN into the environment, which
+    // readGithubToken would pick up — delete both here so the auth/no-auth
+    // cases are deterministic, and restore whatever CI set afterwards.
+    let savedGithubToken: string | undefined
+    let savedGhToken: string | undefined
+    beforeEach(() => {
+      savedGithubToken = process.env.GITHUB_TOKEN
+      savedGhToken = process.env.GH_TOKEN
+      delete process.env.GITHUB_TOKEN
+      delete process.env.GH_TOKEN
+      // makeMockApp hardcodes getDataDirPath() => '/tmp/mayara-test' (a
+      // shared path, not an isolated temp dir). readGithubToken falls back
+      // to a github-token FILE there, so remove any stray one to keep the
+      // no-token / auth-header cases hermetic regardless of ambient state.
+      rmSync(join('/tmp/mayara-test', 'github-token'), { force: true })
+    })
     afterEach(() => {
       vi.unstubAllGlobals()
+      if (savedGithubToken === undefined) delete process.env.GITHUB_TOKEN
+      else process.env.GITHUB_TOKEN = savedGithubToken
+      if (savedGhToken === undefined) delete process.env.GH_TOKEN
+      else process.env.GH_TOKEN = savedGhToken
     })
 
-    function stubFetch(impl: (url: string) => Promise<unknown>) {
+    // Captured (url, init) tuples so tests can assert request headers.
+    let fetchCalls: { url: string; init?: { headers?: Record<string, string> } }[]
+
+    function stubFetch(impl: (url: string, init?: unknown) => Promise<unknown>) {
+      fetchCalls = []
       vi.stubGlobal(
         'fetch',
-        vi.fn((url: string) => impl(url))
+        vi.fn((url: string, init?: { headers?: Record<string, string> }) => {
+          fetchCalls.push({ url, init })
+          return impl(url, init)
+        })
       )
     }
 
+    // Responses carry a headers.get() so the classify() rate-limit check
+    // (headers.get('x-ratelimit-remaining')) never throws on a stub.
     const okJson = (body: unknown) =>
-      Promise.resolve({ ok: true, json: () => Promise.resolve(body) })
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: () => Promise.resolve(body)
+      })
+
+    // GitHub's primary-rate-limit signature: 403 with remaining == '0'.
+    const rateLimited = (status = 403) =>
+      Promise.resolve({
+        ok: false,
+        status,
+        headers: {
+          get: (h: string) => (h === 'x-ratelimit-remaining' ? '0' : null)
+        },
+        json: () => Promise.resolve([])
+      })
 
     it('merges release tags and labeled open PRs, skipping unlabeled PRs', async () => {
       stubFetch((url) => {
@@ -766,18 +847,48 @@ describe('mayara-server-signalk-plugin container integration', () => {
       await handler({}, res)
 
       expect(res.statusCode).toBe(200)
-      const body = res.body as { tag: string; prerelease?: boolean; pr?: number; title?: string }[]
-      expect(body).toContainEqual({ tag: 'v3.4.0', prerelease: false })
-      expect(body).toContainEqual({ tag: 'v3.5.0-rc1', prerelease: true })
-      expect(body).toContainEqual({ tag: 'pr123', pr: 123, title: 'Fix gain' })
+      const body = res.body as {
+        versions: { tag: string; prerelease?: boolean; pr?: number; title?: string }[]
+        sources: { releases: string; prImages: string }
+      }
+      expect(body.versions).toContainEqual({ tag: 'v3.4.0', prerelease: false })
+      expect(body.versions).toContainEqual({ tag: 'v3.5.0-rc1', prerelease: true })
+      expect(body.versions).toContainEqual({ tag: 'pr123', pr: 123, title: 'Fix gain' })
       // draft release filtered out
-      expect(body.some((v) => v.tag === 'v3.3.0-draft')).toBe(false)
+      expect(body.versions.some((v) => v.tag === 'v3.3.0-draft')).toBe(false)
       // unlabeled PR filtered out
-      expect(body.some((v) => v.tag === 'pr99')).toBe(false)
+      expect(body.versions.some((v) => v.tag === 'pr99')).toBe(false)
+      expect(body.sources).toEqual({ releases: 'ok', prImages: 'ok' })
       await plugin.stop()
     })
 
-    it('still returns releases when the PRs request fails (degrade, not fail)', async () => {
+    it('records prImages as rate-limited when /pulls is throttled but keeps releases (the boat bug)', async () => {
+      stubFetch((url) => {
+        if (url.includes('/releases')) {
+          return okJson([{ tag_name: 'v3.4.0', prerelease: false, draft: false }])
+        }
+        return rateLimited()
+      })
+
+      const { router, plugin } = await loadPlugin()
+      const handler = getHandler(router, 'GET /api/versions')
+      const res = makeRes()
+      await handler({}, res)
+
+      expect(res.statusCode).toBe(200)
+      const body = res.body as {
+        versions: { tag: string }[]
+        sources: { releases: string; prImages: string }
+      }
+      expect(body.versions).toContainEqual({ tag: 'v3.4.0', prerelease: false })
+      expect(body.versions.some((v) => v.tag.startsWith('pr'))).toBe(false)
+      // The failure is RECORDED, not silently dropped, so the panel can
+      // say "rate-limited, retry" instead of implying no PR images exist.
+      expect(body.sources).toEqual({ releases: 'ok', prImages: 'rate-limited' })
+      await plugin.stop()
+    })
+
+    it('records a generic error (not rate-limited) when /pulls rejects', async () => {
       stubFetch((url) => {
         if (url.includes('/releases')) {
           return okJson([{ tag_name: 'v3.4.0', prerelease: false, draft: false }])
@@ -791,14 +902,13 @@ describe('mayara-server-signalk-plugin container integration', () => {
       await handler({}, res)
 
       expect(res.statusCode).toBe(200)
-      const body = res.body as { tag: string }[]
-      expect(body).toContainEqual({ tag: 'v3.4.0', prerelease: false })
-      expect(body.some((v) => v.tag.startsWith('pr'))).toBe(false)
+      const body = res.body as { sources: { releases: string; prImages: string } }
+      expect(body.sources).toEqual({ releases: 'ok', prImages: 'error' })
       await plugin.stop()
     })
 
-    it('returns 502 when both sources are down', async () => {
-      stubFetch(() => Promise.resolve({ ok: false, json: () => Promise.resolve([]) }))
+    it('returns 502 with per-source status when both sources are rate-limited', async () => {
+      stubFetch(() => rateLimited())
 
       const { router, plugin } = await loadPlugin()
       const handler = getHandler(router, 'GET /api/versions')
@@ -806,6 +916,104 @@ describe('mayara-server-signalk-plugin container integration', () => {
       await handler({}, res)
 
       expect(res.statusCode).toBe(502)
+      const body = res.body as { error: string; sources: { releases: string; prImages: string } }
+      expect(body.sources).toEqual({ releases: 'rate-limited', prImages: 'rate-limited' })
+      await plugin.stop()
+    })
+
+    it('sends an Authorization header on both calls when a GitHub token is set', async () => {
+      process.env.GITHUB_TOKEN = 'ghp_test'
+      stubFetch(() => okJson([]))
+
+      const { router, plugin } = await loadPlugin()
+      const handler = getHandler(router, 'GET /api/versions')
+      await handler({}, makeRes())
+
+      expect(fetchCalls).toHaveLength(2)
+      for (const call of fetchCalls) {
+        expect(call.init?.headers?.Authorization).toBe('Bearer ghp_test')
+        expect(call.init?.headers?.Accept).toBe('application/vnd.github+json')
+      }
+      await plugin.stop()
+    })
+
+    it('sends no Authorization header when no GitHub token is available', async () => {
+      stubFetch(() => okJson([]))
+
+      const { router, plugin } = await loadPlugin()
+      const handler = getHandler(router, 'GET /api/versions')
+      await handler({}, makeRes())
+
+      expect(fetchCalls).toHaveLength(2)
+      for (const call of fetchCalls) {
+        expect(call.init?.headers?.Authorization).toBeUndefined()
+      }
+      await plugin.stop()
+    })
+
+    it('retries without the token when a present token is rejected (401), so a bad token is never worse than none', async () => {
+      process.env.GITHUB_TOKEN = 'ghp_expired'
+      // Authenticated calls 401; the unauthenticated retry succeeds. The
+      // retry must return the shape matching each URL (releases vs pulls),
+      // or the pulls handler would choke on release-shaped data.
+      stubFetch((url, init) => {
+        const headers = (init as { headers?: Record<string, string> } | undefined)?.headers
+        const authed = !!headers?.Authorization
+        if (authed) {
+          return Promise.resolve({
+            ok: false,
+            status: 401,
+            headers: { get: () => null },
+            json: () => Promise.resolve([])
+          })
+        }
+        if (url.includes('/releases')) {
+          return okJson([{ tag_name: 'v3.4.0', prerelease: false, draft: false }])
+        }
+        return okJson([])
+      })
+
+      const { router, plugin } = await loadPlugin()
+      const handler = getHandler(router, 'GET /api/versions')
+      const res = makeRes()
+      await handler({}, res)
+
+      // 2 authenticated + 2 retries = 4 calls; the last two carry no auth.
+      expect(fetchCalls).toHaveLength(4)
+      const retries = fetchCalls.filter((c) => !c.init?.headers?.Authorization)
+      expect(retries).toHaveLength(2)
+      // The retry populated the list — strictly better than the 502 the
+      // un-retried authenticated 401s would have produced.
+      expect(res.statusCode).toBe(200)
+      const body = res.body as { versions: { tag: string }[]; sources: { releases: string } }
+      expect(body.versions).toContainEqual({ tag: 'v3.4.0', prerelease: false })
+      expect(body.sources.releases).toBe('ok')
+      await plugin.stop()
+    })
+
+    it('classifies a non-rate-limit failure (500) as error, not rate-limited', async () => {
+      // 500 with no x-ratelimit-remaining header must NOT be mislabeled
+      // "rate-limited, retry shortly" — that would tell the operator to
+      // wait when the real problem is a server error.
+      stubFetch((url) => {
+        if (url.includes('/releases')) {
+          return okJson([{ tag_name: 'v3.4.0', prerelease: false, draft: false }])
+        }
+        return Promise.resolve({
+          ok: false,
+          status: 500,
+          headers: { get: () => null },
+          json: () => Promise.resolve([])
+        })
+      })
+
+      const { router, plugin } = await loadPlugin()
+      const handler = getHandler(router, 'GET /api/versions')
+      const res = makeRes()
+      await handler({}, res)
+
+      const body = res.body as { sources: { releases: string; prImages: string } }
+      expect(body.sources).toEqual({ releases: 'ok', prImages: 'error' })
       await plugin.stop()
     })
   })
