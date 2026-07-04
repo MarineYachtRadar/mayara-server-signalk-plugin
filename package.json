@@ -1,6 +1,6 @@
 {
   "name": "@marineyachtradar/signalk-plugin",
-  "version": "1.4.3",
+  "version": "1.4.4",
   "description": "MaYaRa Radar - Connect SignalK to mayara-server",
   "main": "plugin/index.js",
   "signalk-plugin-enabled-by-default": true,
