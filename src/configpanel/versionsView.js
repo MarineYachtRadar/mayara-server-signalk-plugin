@@ -46,14 +46,26 @@ export function deriveVersionsView(ok, body) {
 }
 
 /**
- * The set of tags the dropdown renders as real options. Used to decide
- * whether the running tag needs a synthetic fallback option.
+ * Split the version list into the buckets the dropdown renders: PR test
+ * images, the top 5 stable releases, and the top 3 pre-releases. The
+ * single source of the slice limits — the panel's <optgroup> builder AND
+ * shownTags both consume this, so the running-tag fallback can never
+ * disagree with what is actually shown.
  */
-export function shownTags(versions) {
+export function splitVersions(versions) {
   const prVersions = versions.filter((v) => typeof v.pr === "number");
   const releaseVersions = versions.filter((v) => typeof v.pr !== "number");
   const stableVersions = releaseVersions.filter((v) => !v.prerelease).slice(0, 5);
   const preVersions = releaseVersions.filter((v) => v.prerelease).slice(0, 3);
+  return { prVersions, stableVersions, preVersions };
+}
+
+/**
+ * The set of tags the dropdown renders as real options. Used to decide
+ * whether the running tag needs a synthetic fallback option.
+ */
+export function shownTags(versions) {
+  const { prVersions, stableVersions, preVersions } = splitVersions(versions);
   return new Set([
     "latest",
     "main",

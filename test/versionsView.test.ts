@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { deriveVersionsView, shownTags, runningTagFallback } from '../src/configpanel/versionsView'
+import {
+  deriveVersionsView,
+  shownTags,
+  runningTagFallback,
+  splitVersions
+} from '../src/configpanel/versionsView'
 
 describe('versionsView: deriveVersionsView', () => {
   it('full success: returns the versions and no error line', () => {
@@ -110,5 +115,34 @@ describe('versionsView: runningTagFallback', () => {
     expect(set.has('v3.4.0')).toBe(true)
     expect(set.has('v3.5.0')).toBe(false)
     expect(runningTagFallback('v3.5.0', many)).toBe('v3.5.0')
+  })
+})
+
+describe('versionsView: splitVersions', () => {
+  // Shared by the panel's <optgroup> render AND shownTags, so both agree
+  // on the slice limits (5 stable, 3 pre-release).
+  it('buckets PR / stable / pre-release with the rendered slice limits', () => {
+    const versions = [
+      ...Array.from({ length: 7 }, (_, i) => ({ tag: `v3.${i}.0`, prerelease: false })),
+      ...Array.from({ length: 4 }, (_, i) => ({ tag: `v4.0.0-rc${i}`, prerelease: true })),
+      { tag: 'pr429', pr: 429, title: 'x' }
+    ]
+    const { prVersions, stableVersions, preVersions } = splitVersions(versions)
+    expect(prVersions.map((v) => v.tag)).toEqual(['pr429'])
+    expect(stableVersions).toHaveLength(5)
+    expect(preVersions).toHaveLength(3)
+  })
+
+  it('is the exact source of shownTags membership', () => {
+    const versions = [
+      { tag: 'v3.4.0', prerelease: false },
+      { tag: 'v4.0.0-rc0', prerelease: true },
+      { tag: 'pr429', pr: 429, title: 'x' }
+    ]
+    const { prVersions, stableVersions, preVersions } = splitVersions(versions)
+    const set = shownTags(versions)
+    for (const v of [...prVersions, ...stableVersions, ...preVersions]) {
+      expect(set.has(v.tag)).toBe(true)
+    }
   })
 })

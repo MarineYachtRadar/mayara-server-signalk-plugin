@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { deriveVersionsView, runningTagFallback } from "./versionsView";
+import { deriveVersionsView, runningTagFallback, splitVersions } from "./versionsView";
 
 const S = {
   root: {
@@ -384,12 +384,10 @@ export default function PluginConfigurationPanel({ configuration, save }) {
     ? false  // PR test images and floating "latest" aren't version-compared
     : versions.length > 0 && !versions.some((v) => v.tag === mayaraVersion);
 
-  // PR test images carry a `pr` number (no `prerelease`); split them out so
-  // they aren't misclassified as stable releases.
-  const prVersions = versions.filter((v) => typeof v.pr === "number");
-  const releaseVersions = versions.filter((v) => typeof v.pr !== "number");
-  const stableVersions = releaseVersions.filter((v) => !v.prerelease).slice(0, 5);
-  const preVersions = releaseVersions.filter((v) => v.prerelease).slice(0, 3);
+  // The rendered option buckets. splitVersions is the shared source of the
+  // slice limits, so shownTags/runningTagFallback can never disagree with
+  // what these <optgroup>s actually render.
+  const { prVersions, stableVersions, preVersions } = splitVersions(versions);
 
   // When the running image's tag isn't among the rendered options — e.g. a
   // pr<N> whose /pulls fetch was rate-limited, or a stable pin that fell out

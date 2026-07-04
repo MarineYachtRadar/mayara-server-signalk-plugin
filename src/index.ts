@@ -519,14 +519,14 @@ module.exports = function (app: MayaraServerAPI): Plugin {
             Accept: 'application/vnd.github+json'
           }
           if (ghToken) headers.Authorization = `Bearer ${ghToken}`
-          const res = await fetch(url, { headers, signal: AbortSignal.timeout(10000) })
-          if (res.status === 401 && ghToken) {
+          const ghRes = await fetch(url, { headers, signal: AbortSignal.timeout(10000) })
+          if (ghRes.status === 401 && ghToken) {
             return fetch(url, {
               headers: { Accept: 'application/vnd.github+json' },
               signal: AbortSignal.timeout(10000)
             })
           }
-          return res
+          return ghRes
         }
 
         const releasesP = ghFetch(`https://api.github.com/repos/${repo}/releases?per_page=10`)
@@ -586,11 +586,17 @@ module.exports = function (app: MayaraServerAPI): Plugin {
           if (settled.status !== 'fulfilled') return 'error'
           const r = settled.value
           if (r.ok) return 'ok'
-          if (
-            (r.status === 403 || r.status === 429) &&
-            r.headers?.get?.('x-ratelimit-remaining') === '0'
-          ) {
-            return 'rate-limited'
+          // Both GitHub rate limits reply 403 or 429. The PRIMARY limit
+          // sets x-ratelimit-remaining: 0; the SECONDARY (abuse) limit —
+          // the one a shared WAN IP trips — may instead send Retry-After
+          // with no remaining:0. Recognize either so the panel reports a
+          // retryable limit rather than a generic error.
+          if (r.status === 403 || r.status === 429) {
+            const remaining = r.headers?.get?.('x-ratelimit-remaining')
+            const retryAfter = r.headers?.get?.('retry-after')
+            if (remaining === '0' || (retryAfter !== null && retryAfter !== undefined)) {
+              return 'rate-limited'
+            }
           }
           return 'error'
         }

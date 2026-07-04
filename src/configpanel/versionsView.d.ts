@@ -19,6 +19,12 @@ export interface VersionsView {
 
 export function deriveVersionsView(ok: boolean, body: unknown): VersionsView
 
+export function splitVersions(versions: VersionEntry[]): {
+  prVersions: VersionEntry[]
+  stableVersions: VersionEntry[]
+  preVersions: VersionEntry[]
+}
+
 export function shownTags(versions: VersionEntry[]): Set<string>
 
 export function runningTagFallback(

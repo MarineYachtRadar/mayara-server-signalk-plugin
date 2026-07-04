@@ -823,6 +823,18 @@ describe('mayara-server-signalk-plugin container integration', () => {
         json: () => Promise.resolve([])
       })
 
+    // GitHub's SECONDARY (abuse) limit — the one a shared WAN IP trips:
+    // 429 with Retry-After but NO x-ratelimit-remaining: 0.
+    const secondaryRateLimited = () =>
+      Promise.resolve({
+        ok: false,
+        status: 429,
+        headers: {
+          get: (h: string) => (h === 'retry-after' ? '60' : null)
+        },
+        json: () => Promise.resolve([])
+      })
+
     it('merges release tags and labeled open PRs, skipping unlabeled PRs', async () => {
       stubFetch((url) => {
         if (url.includes('/releases')) {
@@ -1014,6 +1026,27 @@ describe('mayara-server-signalk-plugin container integration', () => {
 
       const body = res.body as { sources: { releases: string; prImages: string } }
       expect(body.sources).toEqual({ releases: 'ok', prImages: 'error' })
+      await plugin.stop()
+    })
+
+    it('classifies a secondary-limit 429 (Retry-After, no remaining:0) as rate-limited', async () => {
+      // The abuse limit a shared WAN IP trips: 429 with Retry-After but
+      // no x-ratelimit-remaining: 0. Must be reported as rate-limited so
+      // the panel says "retry shortly", not a generic error.
+      stubFetch((url) => {
+        if (url.includes('/releases')) {
+          return okJson([{ tag_name: 'v3.4.0', prerelease: false, draft: false }])
+        }
+        return secondaryRateLimited()
+      })
+
+      const { router, plugin } = await loadPlugin()
+      const handler = getHandler(router, 'GET /api/versions')
+      const res = makeRes()
+      await handler({}, res)
+
+      const body = res.body as { sources: { releases: string; prImages: string } }
+      expect(body.sources).toEqual({ releases: 'ok', prImages: 'rate-limited' })
       await plugin.stop()
     })
   })
