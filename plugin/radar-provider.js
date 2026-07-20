@@ -1,31 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.createRadarProvider = createRadarProvider;
-// mayara serves its color legend inside /capabilities as `legend.pixels`, an array indexed by pixel
-// value where each entry is `{ color, type }`. Map it to the Radar API `LegendEntry[]` so consumers can
-// color spoke samples; the array index is the sample value, so each entry bounds itself to that value.
-function mapLegend(capabilities) {
-    const legend = capabilities.legend;
-    const pixels = legend ? legend.pixels : undefined;
-    if (!Array.isArray(pixels))
-        return undefined;
-    const entries = [];
-    pixels.forEach((pixel, index) => {
-        if (typeof pixel !== 'object' || pixel === null)
-            return;
-        const color = pixel.color;
-        if (typeof color !== 'string')
-            return;
-        const type = pixel.type;
-        entries.push({
-            color,
-            label: typeof type === 'string' ? type : `level ${index}`,
-            minValue: index,
-            maxValue: index
-        });
-    });
-    return entries.length > 0 ? entries : undefined;
-}
 // The controls the Radar API types as auto-capable (RadarControlValue, a required boolean auto), as
 // opposed to value-only controls like rain. gain and sea must always carry a boolean auto.
 const AUTO_CAPABLE_CONTROLS = new Set(['gain', 'sea']);
@@ -77,27 +52,28 @@ function createRadarProvider(client, app) {
                 const radarEntry = radars[radarId];
                 if (!radarEntry)
                     return null;
-                const controls = await client.getControls(radarId);
-                const capabilities = (await client.getCapabilities(radarId));
-                const powerCtrl = controls.power;
-                const rangeCtrl = controls.range;
-                const status = powerCtrl?.value === 2 ? 'transmit' : powerCtrl?.value === 1 ? 'standby' : 'off';
-                const legend = mapLegend(capabilities);
-                return {
-                    id: radarId,
+                // Lean discovery object per radar_api.md: identify the radar only. Live
+                // state (status, controls) is served by getState/getControls, and static
+                // parameters (spokesPerRevolution, maxSpokeLength, legend) by
+                // getCapabilities — so nothing is lost, it just moves off the list.
+                const brand = typeof radarEntry.brand === 'string' ? radarEntry.brand : 'Unknown';
+                const model = typeof radarEntry.model === 'string' ? radarEntry.model : undefined;
+                const info = {
                     name: typeof radarEntry.name === 'string'
                         ? radarEntry.name
-                        : typeof radarEntry.model === 'string'
-                            ? `${typeof radarEntry.brand === 'string' ? radarEntry.brand : ''} ${radarEntry.model}`.trim()
+                        : model
+                            ? `${brand === 'Unknown' ? '' : brand} ${model}`.trim()
                             : radarId,
-                    brand: typeof radarEntry.brand === 'string' ? radarEntry.brand : 'Unknown',
-                    status: status,
-                    spokesPerRevolution: Number(capabilities.spokesPerRevolution || 2048),
-                    maxSpokeLen: Number(capabilities.maxSpokeLength || 512),
-                    range: Number(rangeCtrl?.value ?? 1852),
-                    controls: mapControls(controls),
-                    ...(legend ? { legend } : {})
+                    brand,
+                    radarIpAddress: typeof radarEntry.radarIpAddress === 'string' ? radarEntry.radarIpAddress : ''
                 };
+                if (model)
+                    info.model = model;
+                // spokeDataUrl / streamUrl are intentionally omitted so clients use
+                // signalk-server's own endpoints (…/radars/{id}/spokes and
+                // /signalk/v1/stream), which reach the radar through this plugin even
+                // when mayara runs on another host or container.
+                return info;
             }
             catch (err) {
                 debug(`getRadarInfo error for ${radarId}: ${err instanceof Error ? err.message : String(err)}`);
@@ -122,7 +98,11 @@ function createRadarProvider(client, app) {
                     id: radarId,
                     timestamp: new Date().toISOString(),
                     status: status,
-                    controls: controls
+                    // Normalise mayara's controls the way the discovery list used to
+                    // (auto flags on gain/sea, gain default) — now that the lean
+                    // RadarInfo carries no controls, /state and /controls are where
+                    // clients read them.
+                    controls: mapControls(controls)
                 };
             }
             catch (err) {

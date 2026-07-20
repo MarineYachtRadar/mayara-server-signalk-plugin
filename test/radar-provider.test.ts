@@ -6,7 +6,12 @@ import { MayaraServerAPI } from '../src/types'
 function createMockClient(overrides: Partial<MayaraClient> = {}): MayaraClient {
   return {
     getRadars: vi.fn().mockResolvedValue({
-      'radar-0': { brand: 'Furuno', model: 'DRS4D-NXT', name: 'DRS4D-NXT 6424' },
+      'radar-0': {
+        brand: 'Furuno',
+        model: 'DRS4D-NXT',
+        name: 'DRS4D-NXT 6424',
+        radarIpAddress: '10.0.0.5'
+      },
       'radar-1': { brand: 'Navico', model: 'HALO', name: 'HALO 034A' }
     }),
     getCapabilities: vi.fn().mockResolvedValue({
@@ -66,36 +71,28 @@ describe('createRadarProvider', () => {
     expect(ids).toEqual([])
   })
 
-  it('getRadarInfo builds RadarInfo from controls and capabilities', async () => {
+  it('getRadarInfo returns the lean discovery object (no live state)', async () => {
     const client = createMockClient()
     const provider = createRadarProvider(client, createMockApp())
 
     const info = await provider.getRadarInfo('radar-0')
     expect(info).not.toBeNull()
     if (info) {
-      expect(info.id).toBe('radar-0')
       expect(info.name).toBe('DRS4D-NXT 6424')
       expect(info.brand).toBe('Furuno')
-      expect(info.status).toBe('transmit')
-      expect(info.spokesPerRevolution).toBe(8192)
-      expect(info.range).toBe(3000)
+      expect(info.model).toBe('DRS4D-NXT')
+      expect(info.radarIpAddress).toBe('10.0.0.5')
+      // spokeDataUrl/streamUrl omitted so clients use signalk-server's own
+      // endpoints; live state (status/controls) lives on getState, not here.
+      expect(info.spokeDataUrl).toBeUndefined()
+      expect(info.streamUrl).toBeUndefined()
+      expect('status' in info).toBe(false)
+      expect('controls' in info).toBe(false)
     }
   })
 
-  it('getRadarInfo forwards the legend and the full control set', async () => {
+  it('getState forwards the full normalized control set', async () => {
     const client = createMockClient({
-      getCapabilities: vi.fn().mockResolvedValue({
-        spokesPerRevolution: 2048,
-        maxSpokeLength: 1024,
-        legend: {
-          pixels: [
-            { color: '#00000000', type: 'normal' },
-            { color: '#0000ffff', type: 'normal' },
-            { color: '#ff0000ff', type: 'normal' },
-            { color: '#ff00ffff', type: 'dopplerApproaching' }
-          ]
-        }
-      }),
       getControls: vi.fn().mockResolvedValue({
         power: { value: 2 },
         range: { value: 3000 },
@@ -111,26 +108,21 @@ describe('createRadarProvider', () => {
     })
     const provider = createRadarProvider(client, createMockApp())
 
-    const info = await provider.getRadarInfo('radar-0')
-    expect(info).not.toBeNull()
-    if (info) {
-      expect(info.legend).toEqual([
-        { color: '#00000000', label: 'normal', minValue: 0, maxValue: 0 },
-        { color: '#0000ffff', label: 'normal', minValue: 1, maxValue: 1 },
-        { color: '#ff0000ff', label: 'normal', minValue: 2, maxValue: 2 },
-        { color: '#ff00ffff', label: 'dopplerApproaching', minValue: 3, maxValue: 3 }
-      ])
-      expect(info.controls.gain).toEqual({ auto: false, value: 50 })
-      expect(info.controls.sea).toEqual({ auto: true, value: 30 })
-      expect(info.controls.rain).toEqual({ value: 10 })
+    const state = await provider.getState('radar-0')
+    expect(state).not.toBeNull()
+    if (state) {
+      expect(state.status).toBe('transmit')
+      expect(state.controls.gain).toEqual({ auto: false, value: 50 })
+      expect(state.controls.sea).toEqual({ auto: true, value: 30 })
+      expect(state.controls.rain).toEqual({ value: 10 })
       // Non-numeric controls pass through verbatim instead of being dropped.
-      expect(info.controls.targetTrails).toEqual({ value: 'Medium' })
-      expect(info.controls.mode).toEqual({ value: 'dopplerNormal' })
-      expect(info.controls.interferenceRejection).toEqual({ value: true })
+      expect(state.controls.targetTrails).toEqual({ value: 'Medium' })
+      expect(state.controls.mode).toEqual({ value: 'dopplerNormal' })
+      expect(state.controls.interferenceRejection).toEqual({ value: true })
     }
   })
 
-  it('getRadarInfo does not staple auto onto a string-valued auto-capable control', async () => {
+  it('getState does not staple auto onto a string-valued auto-capable control', async () => {
     const client = createMockClient({
       getControls: vi.fn().mockResolvedValue({
         power: { value: 2 },
@@ -142,15 +134,15 @@ describe('createRadarProvider', () => {
     })
     const provider = createRadarProvider(client, createMockApp())
 
-    const info = await provider.getRadarInfo('radar-0')
-    expect(info).not.toBeNull()
-    if (info) {
-      expect(info.controls.gain).toEqual({ auto: false, value: 40 })
-      expect(info.controls.sea).toEqual({ value: 'Harbour' })
+    const state = await provider.getState('radar-0')
+    expect(state).not.toBeNull()
+    if (state) {
+      expect(state.controls.gain).toEqual({ auto: false, value: 40 })
+      expect(state.controls.sea).toEqual({ value: 'Harbour' })
     }
   })
 
-  it('getRadarInfo defaults auto on gain and sea when mayara omits it', async () => {
+  it('getState defaults auto on gain and sea when mayara omits it', async () => {
     const client = createMockClient({
       getControls: vi.fn().mockResolvedValue({
         power: { value: 2 },
@@ -161,12 +153,12 @@ describe('createRadarProvider', () => {
     })
     const provider = createRadarProvider(client, createMockApp())
 
-    const info = await provider.getRadarInfo('radar-0')
-    expect(info).not.toBeNull()
-    if (info) {
-      expect(info.controls.gain).toEqual({ auto: false, value: 40 })
-      expect(info.controls.sea).toEqual({ auto: false, value: 20 })
-      expect(info.controls.rain).toEqual({ value: 10 })
+    const state = await provider.getState('radar-0')
+    expect(state).not.toBeNull()
+    if (state) {
+      expect(state.controls.gain).toEqual({ auto: false, value: 40 })
+      expect(state.controls.sea).toEqual({ auto: false, value: 20 })
+      expect(state.controls.rain).toEqual({ value: 10 })
     }
   })
 
