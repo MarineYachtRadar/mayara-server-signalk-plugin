@@ -81,6 +81,15 @@ describe('MayaraClient', () => {
     )
   })
 
+  it('requests the state stream with subscribe=none so it never gets nav/AIS', () => {
+    const client = new MayaraClient({ host: '192.168.1.10', port: 6502 })
+    // The forwarder opts out of own-ship data (Signal K default `self` streams
+    // navigation.*) and subscribes only to radars.*/notifications.* itself.
+    expect(client.getStateStreamUrl()).toBe(
+      'ws://192.168.1.10:6502/signalk/v1/stream?subscribe=none'
+    )
+  })
+
   it('uses /targets/acquire for target acquisition', async () => {
     serverPort = await createTestServer((req, res) => {
       expect(req.method).toBe('POST')
