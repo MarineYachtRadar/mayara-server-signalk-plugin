@@ -1,4 +1,4 @@
-import { Plugin } from '@signalk/server-api'
+import { Plugin, ActionResult } from '@signalk/server-api'
 import { Request, Response, IRouter } from 'express'
 import { type IncomingMessage } from 'http'
 import { Server as NetServer, type Socket } from 'net'
@@ -1128,6 +1128,16 @@ module.exports = function (app: MayaraServerAPI): Plugin {
       notificationForwarder = new NotificationForwarder(app, {
         pluginId: PLUGIN_ID,
         url: client.getStateStreamUrl(),
+        // Relay both guard-zone notifications and radar control/target state
+        // (radars.{id}.controls.*) onto the host SK server's own v1 stream, so
+        // a client subscribed there sees live radar state without connecting to
+        // mayara directly. This is the "out" half of the Radar API control
+        // stream; the "in" half (control changes) is the PUT handlers below.
+        subscriptions: [
+          { path: 'notifications.*', policy: 'instant' },
+          { path: 'radars.*', policy: 'instant' }
+        ],
+        pathPrefixes: ['notifications.', 'radars.'],
         debug: app.debug.bind(app),
         reconnectInterval: (settings.reconnectInterval || 5) * 1000
       })
@@ -1252,6 +1262,14 @@ module.exports = function (app: MayaraServerAPI): Plugin {
         } else {
           app.debug('binaryStreamManager not available - spoke streaming disabled')
         }
+
+        // Register Signal K PUT handlers for this radar's controls, so a client
+        // can change a control by PUTting radars.<id>.controls.<control> on the
+        // host SK server (over the v1 stream or REST) and have it forwarded to
+        // mayara — the "in" half of the Radar API control stream. Fire-and-forget:
+        // it fetches the control list from mayara. Re-registration on a later
+        // rediscovery is idempotent (same source overwrites).
+        void registerControlPutHandlers(radarId)
       }
     }
 
@@ -1266,6 +1284,49 @@ module.exports = function (app: MayaraServerAPI): Plugin {
           spokeForwarders.delete(radarId)
         }
       }
+    }
+  }
+
+  // Register a Signal K PUT handler for every control mayara reports on a radar,
+  // at path radars.<id>.controls.<control>. Each handler forwards the put value
+  // verbatim to mayara's control PUT (the same call the Radar API's REST
+  // setControl uses), so a value read off the v1 stream can be echoed back to
+  // change it. Read-only controls (modelName, firmwareVersion, …) get a handler
+  // too, but mayara rejects the write. Registration is idempotent on rediscovery
+  // because the source (PLUGIN_ID) key overwrites.
+  async function registerControlPutHandlers(radarId: string): Promise<void> {
+    if (!client) return
+    try {
+      const controls = await client.getControls(radarId)
+      const controlIds = Object.keys(controls)
+      for (const controlId of controlIds) {
+        const path = `radars.${radarId}.controls.${controlId}`
+        app.registerPutHandler(
+          'vessels.self',
+          path,
+          (
+            _context: string,
+            _path: string,
+            value: unknown,
+            cb: (r: ActionResult) => void
+          ): ActionResult => {
+            if (!client) return { state: 'FAILED', statusCode: 503 }
+            client
+              .setControl(radarId, controlId, value)
+              .then(() => {
+                cb({ state: 'COMPLETED', statusCode: 200 })
+              })
+              .catch((err: unknown) => {
+                cb({ state: 'COMPLETED', statusCode: 400, message: errMsg(err) })
+              })
+            return { state: 'PENDING' }
+          },
+          PLUGIN_ID
+        )
+      }
+      app.debug(`Registered ${controlIds.length} control PUT handler(s) for ${radarId}`)
+    } catch (err) {
+      app.debug(`Failed to register PUT handlers for ${radarId}: ${errMsg(err)}`)
     }
   }
 
