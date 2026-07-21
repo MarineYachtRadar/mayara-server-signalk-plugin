@@ -35,6 +35,24 @@ describe('MayaraClient', () => {
     expect(result).toEqual({ 'radar-0': { name: 'Test', brand: 'Furuno' } })
   })
 
+  it('unwraps the { version, radars } envelope so callers key by radar id', async () => {
+    serverPort = await createTestServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(
+        JSON.stringify({
+          version: '3.4.0',
+          radars: { 'radar-0': { name: 'Test', brand: 'Furuno' } }
+        })
+      )
+    })
+
+    const client = new MayaraClient({ host: 'localhost', port: serverPort })
+    const result = await client.getRadars()
+    // Bare map — not the envelope — so Object.keys yields ids, not version/radars.
+    expect(Object.keys(result)).toEqual(['radar-0'])
+    expect(result).toEqual({ 'radar-0': { name: 'Test', brand: 'Furuno' } })
+  })
+
   it('makes PUT requests with body', async () => {
     let receivedBody = ''
     serverPort = await createTestServer((req, res) => {

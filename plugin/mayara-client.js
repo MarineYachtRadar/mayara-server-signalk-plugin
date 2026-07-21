@@ -63,7 +63,12 @@ class MayaraClient {
         });
     }
     async getRadars() {
-        return (await this.request('GET', API_BASE));
+        const response = (await this.request('GET', API_BASE));
+        // mayara returns the `{ version, radars }` envelope; unwrap to the bare
+        // `{ id: RadarInfo }` map so callers can key by radar id (and `Object.keys`
+        // yields radar ids, not `version`/`radars`). Tolerate an older bare response.
+        const radars = response.radars;
+        return (radars && typeof radars === 'object' ? radars : response);
     }
     async getCapabilities(radarId) {
         return this.request('GET', `${API_BASE}/${radarId}/capabilities`);

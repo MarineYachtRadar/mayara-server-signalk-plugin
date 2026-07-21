@@ -72,7 +72,12 @@ export class MayaraClient {
   }
 
   async getRadars(): Promise<Record<string, unknown>> {
-    return (await this.request('GET', API_BASE)) as Record<string, unknown>
+    const response = (await this.request('GET', API_BASE)) as Record<string, unknown>
+    // mayara returns the `{ version, radars }` envelope; unwrap to the bare
+    // `{ id: RadarInfo }` map so callers can key by radar id (and `Object.keys`
+    // yields radar ids, not `version`/`radars`). Tolerate an older bare response.
+    const radars = response.radars
+    return (radars && typeof radars === 'object' ? radars : response) as Record<string, unknown>
   }
 
   async getCapabilities(radarId: string): Promise<unknown> {

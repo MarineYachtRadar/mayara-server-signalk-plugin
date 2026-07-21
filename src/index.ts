@@ -272,15 +272,19 @@ module.exports = function (app: MayaraServerAPI): Plugin {
               req.url?.includes('/signalk/v2/api/vessels/self/radars')
             ) {
               try {
-                const json = JSON.parse(buffer.toString('utf8')) as Record<
-                  string,
-                  { streamUrl?: string; spokeDataUrl?: string }
-                >
-                for (const radar of Object.values(json)) {
+                const parsed: unknown = JSON.parse(buffer.toString('utf8'))
+                // mayara's list is the `{ version, radars }` envelope (matching
+                // the signalk-server Radar API); tolerate a bare keyed map too.
+                type RadarEntry = { streamUrl?: string; spokeDataUrl?: string }
+                const json = parsed as {
+                  radars?: Record<string, RadarEntry>
+                } & Record<string, RadarEntry>
+                const radars: Record<string, RadarEntry> = json.radars ?? json
+                for (const radar of Object.values(radars)) {
                   if (radar.streamUrl) radar.streamUrl = rewriteStreamUrl(radar.streamUrl)
                   if (radar.spokeDataUrl) radar.spokeDataUrl = rewriteStreamUrl(radar.spokeDataUrl)
                 }
-                return Promise.resolve(JSON.stringify(json))
+                return Promise.resolve(JSON.stringify(parsed))
               } catch {
                 return Promise.resolve(buffer)
               }

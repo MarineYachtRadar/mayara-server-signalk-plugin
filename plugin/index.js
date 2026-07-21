@@ -235,14 +235,16 @@ module.exports = function (app) {
                         if (ct.includes('application/json') &&
                             req.url?.includes('/signalk/v2/api/vessels/self/radars')) {
                             try {
-                                const json = JSON.parse(buffer.toString('utf8'));
-                                for (const radar of Object.values(json)) {
+                                const parsed = JSON.parse(buffer.toString('utf8'));
+                                const json = parsed;
+                                const radars = json.radars ?? json;
+                                for (const radar of Object.values(radars)) {
                                     if (radar.streamUrl)
                                         radar.streamUrl = rewriteStreamUrl(radar.streamUrl);
                                     if (radar.spokeDataUrl)
                                         radar.spokeDataUrl = rewriteStreamUrl(radar.spokeDataUrl);
                                 }
-                                return Promise.resolve(JSON.stringify(json));
+                                return Promise.resolve(JSON.stringify(parsed));
                             }
                             catch {
                                 return Promise.resolve(buffer);
