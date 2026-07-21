@@ -91,7 +91,11 @@ describe('createRadarProvider', () => {
     }
   })
 
-  it('getState forwards the full normalized control set', async () => {
+  it('getState forwards mayara controls verbatim', async () => {
+    // mayara already reports controls in the shape the Radar API expects —
+    // auto-capable controls carry a boolean `auto`, enum/list controls carry
+    // their label string, on/off controls carry a boolean — so the provider
+    // forwards them unchanged (no normalisation on this side).
     const client = createMockClient({
       getControls: vi.fn().mockResolvedValue({
         power: { value: 2 },
@@ -99,10 +103,8 @@ describe('createRadarProvider', () => {
         gain: { auto: false, value: 50 },
         sea: { auto: true, value: 30 },
         rain: { value: 10 },
-        // mayara serves enum/list controls as their label string, not a number.
         targetTrails: { value: 'Medium' },
         mode: { value: 'dopplerNormal' },
-        // and on/off controls as booleans.
         interferenceRejection: { value: true }
       })
     })
@@ -115,50 +117,9 @@ describe('createRadarProvider', () => {
       expect(state.controls.gain).toEqual({ auto: false, value: 50 })
       expect(state.controls.sea).toEqual({ auto: true, value: 30 })
       expect(state.controls.rain).toEqual({ value: 10 })
-      // Non-numeric controls pass through verbatim instead of being dropped.
       expect(state.controls.targetTrails).toEqual({ value: 'Medium' })
       expect(state.controls.mode).toEqual({ value: 'dopplerNormal' })
       expect(state.controls.interferenceRejection).toEqual({ value: true })
-    }
-  })
-
-  it('getState does not staple auto onto a string-valued auto-capable control', async () => {
-    const client = createMockClient({
-      getControls: vi.fn().mockResolvedValue({
-        power: { value: 2 },
-        gain: { value: 40 },
-        // A radar that reports sea as an enum ("Off"/"Harbour"/...) rather than a level:
-        // it must forward as-is, never gain a spurious { auto: false }.
-        sea: { value: 'Harbour' }
-      })
-    })
-    const provider = createRadarProvider(client, createMockApp())
-
-    const state = await provider.getState('radar-0')
-    expect(state).not.toBeNull()
-    if (state) {
-      expect(state.controls.gain).toEqual({ auto: false, value: 40 })
-      expect(state.controls.sea).toEqual({ value: 'Harbour' })
-    }
-  })
-
-  it('getState defaults auto on gain and sea when mayara omits it', async () => {
-    const client = createMockClient({
-      getControls: vi.fn().mockResolvedValue({
-        power: { value: 2 },
-        gain: { value: 40 },
-        sea: { value: 20 },
-        rain: { value: 10 }
-      })
-    })
-    const provider = createRadarProvider(client, createMockApp())
-
-    const state = await provider.getState('radar-0')
-    expect(state).not.toBeNull()
-    if (state) {
-      expect(state.controls.gain).toEqual({ auto: false, value: 40 })
-      expect(state.controls.sea).toEqual({ auto: false, value: 20 })
-      expect(state.controls.rain).toEqual({ value: 10 })
     }
   })
 

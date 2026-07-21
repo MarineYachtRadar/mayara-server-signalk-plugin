@@ -1,38 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.createRadarProvider = createRadarProvider;
-// The controls the Radar API types as auto-capable (RadarControlValue, a required boolean auto), as
-// opposed to value-only controls like rain. gain and sea must always carry a boolean auto.
-const AUTO_CAPABLE_CONTROLS = new Set(['gain', 'sea']);
-// Forward every control mayara reports (gain, sea, rain, range, mode, targetTrails, ...) rather than only
-// gain, so the discovery RadarInfo carries the full current control state mayara already returned. Values
-// pass through as-is: numbers for level controls, but also strings for enum/list controls (mayara serves
-// these as their label, e.g. targetTrails "Medium") and booleans for on/off controls. The auto flag is
-// preserved where the radar reports one, and defaulted to false for the auto-capable controls (gain, sea)
-// when mayara omits it — but only when their value is numeric, so a string-valued control never gets a
-// spurious auto stapled on. The SK RadarControls index signature has no slot for non-numeric values, so
-// the accumulator is widened and the final cast bridges to the API type.
-function mapControls(controls) {
-    const out = {};
-    for (const [id, entry] of Object.entries(controls)) {
-        if (typeof entry !== 'object' || entry === null)
-            continue;
-        if (!('value' in entry))
-            continue;
-        const value = entry.value;
-        const auto = entry.auto;
-        if (typeof value === 'number' && typeof auto === 'boolean')
-            out[id] = { auto, value };
-        else if (typeof value === 'number' && AUTO_CAPABLE_CONTROLS.has(id))
-            out[id] = { auto: false, value };
-        else
-            out[id] = { value };
-    }
-    // A radar that reports no gain still gets a sane default, as before.
-    if (!('gain' in out))
-        out.gain = { auto: true, value: 50 };
-    return out;
-}
 function createRadarProvider(client, app) {
     const debug = app.debug.bind(app);
     return {
@@ -98,11 +66,12 @@ function createRadarProvider(client, app) {
                     id: radarId,
                     timestamp: new Date().toISOString(),
                     status: status,
-                    // Normalise mayara's controls the way the discovery list used to
-                    // (auto flags on gain/sea, gain default) — now that the lean
-                    // RadarInfo carries no controls, /state and /controls are where
-                    // clients read them.
-                    controls: mapControls(controls)
+                    // Forward mayara's controls verbatim. mayara already reports each
+                    // control the way the Radar API expects — auto-capable controls
+                    // (gain/sea/…) always carry a boolean `auto`, enum/list controls carry
+                    // their label string — so no normalisation is needed here, and /state
+                    // and /controls stay byte-identical to mayara's own responses.
+                    controls: controls
                 };
             }
             catch (err) {
