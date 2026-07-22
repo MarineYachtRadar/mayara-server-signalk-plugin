@@ -181,12 +181,30 @@ module.exports = function (app) {
                     return raw;
                 }
             };
+            // mayara base URL for the GUI's own assets and mayara-specific endpoints.
+            const mayaraBase = () => {
+                const host = currentSettings?.host ?? 'localhost';
+                const port = currentSettings?.port ?? 6502;
+                const proto = currentSettings?.secure ? 'https' : 'http';
+                return `${proto}://${host}:${port}`;
+            };
             const guiProxy = (0, http_proxy_middleware_1.createProxyMiddleware)({
-                router: () => {
-                    const host = currentSettings?.host ?? 'localhost';
-                    const port = currentSettings?.port ?? 6502;
-                    const proto = currentSettings?.secure ? 'https' : 'http';
-                    return `${proto}://${host}:${port}`;
+                router: (req) => {
+                    // Radar data — the radar REST API, the control stream, and the spoke
+                    // stream — is all served under `/signalk/...` by the Signal K server
+                    // this plugin registered with. Point those requests at the local SK
+                    // loopback so the proxied GUI runs against full Signal K, proving the
+                    // radar API behaves identically either way. Everything else (the GUI's
+                    // own static assets and mayara-specific `/v2` recordings/debug) goes to
+                    // mayara. Requests carry the `/plugins/<id>/gui` mount stripped, so the
+                    // path here is e.g. `/signalk/v2/...` or `/viewer.js`.
+                    const path = req.url ?? '';
+                    if (path === '/signalk' || path.startsWith('/signalk/')) {
+                        const sk = resolveSignalkLoopback();
+                        const httpScheme = sk.scheme === 'wss' ? 'https' : 'http';
+                        return `${httpScheme}://127.0.0.1:${sk.port}`;
+                    }
+                    return mayaraBase();
                 },
                 // `router.use('/gui', guiProxy)` strips the `/gui` prefix
                 // before the middleware sees the request, so the proxy
@@ -197,6 +215,9 @@ module.exports = function (app) {
                 // API roots through and only prefixes genuine assets with `/gui`.
                 target: 'http://localhost:6502', // overridden by `router`
                 changeOrigin: true,
+                // Accept the Signal K loopback's self-signed cert when SK runs on https
+                // (the token flow connects the same way). No-op for the http targets.
+                secure: false,
                 // Do NOT let the middleware auto-subscribe to the server's `upgrade`
                 // event. It would see the raw `/plugins/<id>/gui/signalk/...` URL,
                 // which `pathRewrite` can't strip the mount prefix from (it only
