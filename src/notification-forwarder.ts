@@ -21,6 +21,19 @@ export interface NotificationForwarderOptions {
   pluginId: string
   /** ws:// URL of mayara-server's `/signalk/v1/stream` endpoint. */
   url: string
+  /**
+   * Subscriptions sent to mayara on connect. Defaults to
+   * `[{ path: 'notifications.*', policy: 'instant' }]`. Pass a wider set to
+   * also relay radar state, e.g. add `{ path: 'radars.*', policy: 'instant' }`.
+   */
+  subscriptions?: Array<{ path: string; policy: string }>
+  /**
+   * Path prefixes whose value entries are republished upstream. A delta value
+   * survives if its `path` starts with any prefix. Defaults to
+   * `['notifications.']`. Add `'radars.'` to bridge radar control/target state
+   * onto the host Signal K server's own `/signalk/v1/stream`.
+   */
+  pathPrefixes?: string[]
   /** Optional logger; defaults to a no-op. */
   debug?: (msg: string) => void
   reconnectInterval?: number
@@ -33,21 +46,29 @@ export interface NotificationForwarderOptions {
 }
 
 /**
- * Bridges `notifications.*` deltas from mayara-server's Signal K v1
- * stream into the host Signal K server via `app.handleMessage`. Mayara
- * emits e.g. `notifications.radar.<key>.guardZone.<n>` on its own
- * stream; without this forwarder, those alarms reach mayara's built-in
- * GUI but not the SK admin notifications panel, the chart plotter, or
- * any other SK consumer.
+ * Bridges deltas from mayara-server's Signal K v1 stream into the host
+ * Signal K server via `app.handleMessage`, so mayara's data appears on the
+ * host's own `/signalk/v1/stream`. Which paths are relayed is configurable
+ * (`pathPrefixes` / `subscriptions`); by default only `notifications.*`.
  *
- * On connect we send a `notifications.*` subscription so mayara filters
- * appropriately. Each incoming delta is forwarded as-is — mayara has
- * already shaped it to the SK spec (state / method / message), and the
- * SK server stamps `$source` from `pluginId` on republish.
+ * Two use cases:
+ * - `notifications.*` (default): guard-zone alarms etc., so they reach the SK
+ *   admin notifications panel, the chart plotter, and other SK consumers.
+ * - `radars.*` (opt-in): radar control/target state modelled as
+ *   `radars.{id}.controls.*` — mayara publishes these on its own stream;
+ *   relaying them surfaces live radar state on the host stream, the control
+ *   half of the Radar API's `streamUrl` (the PUT half is registerPutHandler).
+ *
+ * On connect we send the configured subscriptions so mayara filters
+ * appropriately. Each incoming delta is forwarded as-is — mayara has already
+ * shaped it to the SK spec — and the SK server stamps `$source` from
+ * `pluginId` and `context` = self on republish.
  */
 export class NotificationForwarder {
   private readonly pluginId: string
   private readonly url: string
+  private readonly subscriptions: Array<{ path: string; policy: string }>
+  private readonly pathPrefixes: string[]
   private readonly debug: (msg: string) => void
   private readonly reconnectMs: number
   private readonly webSocketFactory: (url: string) => WebSocketLike
@@ -62,6 +83,8 @@ export class NotificationForwarder {
     this.app = app
     this.pluginId = options.pluginId
     this.url = options.url
+    this.subscriptions = options.subscriptions ?? [{ path: 'notifications.*', policy: 'instant' }]
+    this.pathPrefixes = options.pathPrefixes ?? ['notifications.']
     this.debug = options.debug ?? (() => {})
     this.reconnectMs = options.reconnectInterval ?? 5000
     this.webSocketFactory =
@@ -86,12 +109,10 @@ export class NotificationForwarder {
         this.connected = true
         this.debug('Connected to mayara notification stream')
 
-        // Tell mayara we only care about notification deltas. Using a
-        // wildcard means we pick up every radar's guard-zone alarms (and
-        // any future per-radar notification types mayara adds) without
-        // having to know radar ids up front.
+        // Tell mayara which deltas we want. Wildcards mean we pick up every
+        // radar's alarms/state without having to know radar ids up front.
         const subscription = JSON.stringify({
-          subscribe: [{ path: 'notifications.*', policy: 'instant' }]
+          subscribe: this.subscriptions
         })
         try {
           ws.send(subscription)
@@ -152,24 +173,22 @@ export class NotificationForwarder {
       return
     }
 
-    const delta = this.extractNotificationDelta(parsed)
+    const delta = this.extractDelta(parsed)
     if (!delta) return
 
     try {
       this.app.handleMessage(this.pluginId, delta)
     } catch (err) {
-      this.debug(
-        `Failed to forward notification delta: ${err instanceof Error ? err.message : String(err)}`
-      )
+      this.debug(`Failed to forward delta: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
   /**
-   * Returns a copy of `parsed` containing only the notification values.
-   * Returns null if `parsed` isn't a Signal K delta, has no `updates`,
-   * or carries no `notifications.*` paths after filtering.
+   * Returns a copy of `parsed` containing only the value entries whose `path`
+   * matches one of the configured prefixes. Returns null if `parsed` isn't a
+   * Signal K delta, has no `updates`, or carries no matching paths.
    */
-  private extractNotificationDelta(parsed: unknown): Partial<Delta> | null {
+  private extractDelta(parsed: unknown): Partial<Delta> | null {
     if (!parsed || typeof parsed !== 'object') return null
     const root = parsed as { updates?: unknown[] }
     if (!Array.isArray(root.updates)) return null
@@ -180,20 +199,22 @@ export class NotificationForwarder {
       const values = (update as { values?: unknown[] }).values
       if (!Array.isArray(values)) continue
 
-      const notificationValues = values.filter((v) => {
+      const matchingValues = values.filter((v) => {
         if (!v || typeof v !== 'object') return false
         const path = (v as { path?: unknown }).path
-        return typeof path === 'string' && path.startsWith('notifications.')
+        return (
+          typeof path === 'string' && this.pathPrefixes.some((prefix) => path.startsWith(prefix))
+        )
       })
 
-      if (notificationValues.length > 0) {
+      if (matchingValues.length > 0) {
         // Preserve $source / timestamp from upstream; the SK server
         // will overlay `$source = <pluginId>` on its own, but the
-        // upstream timestamp is the moment the alarm fired and is
+        // upstream timestamp is the moment the value changed and is
         // worth keeping.
         filteredUpdates.push({
           ...update,
-          values: notificationValues
+          values: matchingValues
         })
       }
     }

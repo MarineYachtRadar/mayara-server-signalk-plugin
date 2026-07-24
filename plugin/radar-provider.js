@@ -1,63 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.createRadarProvider = createRadarProvider;
-// mayara serves its color legend inside /capabilities as `legend.pixels`, an array indexed by pixel
-// value where each entry is `{ color, type }`. Map it to the Radar API `LegendEntry[]` so consumers can
-// color spoke samples; the array index is the sample value, so each entry bounds itself to that value.
-function mapLegend(capabilities) {
-    const legend = capabilities.legend;
-    const pixels = legend ? legend.pixels : undefined;
-    if (!Array.isArray(pixels))
-        return undefined;
-    const entries = [];
-    pixels.forEach((pixel, index) => {
-        if (typeof pixel !== 'object' || pixel === null)
-            return;
-        const color = pixel.color;
-        if (typeof color !== 'string')
-            return;
-        const type = pixel.type;
-        entries.push({
-            color,
-            label: typeof type === 'string' ? type : `level ${index}`,
-            minValue: index,
-            maxValue: index
-        });
-    });
-    return entries.length > 0 ? entries : undefined;
-}
-// The controls the Radar API types as auto-capable (RadarControlValue, a required boolean auto), as
-// opposed to value-only controls like rain. gain and sea must always carry a boolean auto.
-const AUTO_CAPABLE_CONTROLS = new Set(['gain', 'sea']);
-// Forward every control mayara reports (gain, sea, rain, range, mode, targetTrails, ...) rather than only
-// gain, so the discovery RadarInfo carries the full current control state mayara already returned. Values
-// pass through as-is: numbers for level controls, but also strings for enum/list controls (mayara serves
-// these as their label, e.g. targetTrails "Medium") and booleans for on/off controls. The auto flag is
-// preserved where the radar reports one, and defaulted to false for the auto-capable controls (gain, sea)
-// when mayara omits it — but only when their value is numeric, so a string-valued control never gets a
-// spurious auto stapled on. The SK RadarControls index signature has no slot for non-numeric values, so
-// the accumulator is widened and the final cast bridges to the API type.
-function mapControls(controls) {
-    const out = {};
-    for (const [id, entry] of Object.entries(controls)) {
-        if (typeof entry !== 'object' || entry === null)
-            continue;
-        if (!('value' in entry))
-            continue;
-        const value = entry.value;
-        const auto = entry.auto;
-        if (typeof value === 'number' && typeof auto === 'boolean')
-            out[id] = { auto, value };
-        else if (typeof value === 'number' && AUTO_CAPABLE_CONTROLS.has(id))
-            out[id] = { auto: false, value };
-        else
-            out[id] = { value };
-    }
-    // A radar that reports no gain still gets a sane default, as before.
-    if (!('gain' in out))
-        out.gain = { auto: true, value: 50 };
-    return out;
-}
 function createRadarProvider(client, app) {
     const debug = app.debug.bind(app);
     return {
@@ -77,27 +20,28 @@ function createRadarProvider(client, app) {
                 const radarEntry = radars[radarId];
                 if (!radarEntry)
                     return null;
-                const controls = await client.getControls(radarId);
-                const capabilities = (await client.getCapabilities(radarId));
-                const powerCtrl = controls.power;
-                const rangeCtrl = controls.range;
-                const status = powerCtrl?.value === 2 ? 'transmit' : powerCtrl?.value === 1 ? 'standby' : 'off';
-                const legend = mapLegend(capabilities);
-                return {
-                    id: radarId,
+                // Lean discovery object per radar_api.md: identify the radar only. Live
+                // state (status, controls) is served by getState/getControls, and static
+                // parameters (spokesPerRevolution, maxSpokeLength, legend) by
+                // getCapabilities — so nothing is lost, it just moves off the list.
+                const brand = typeof radarEntry.brand === 'string' ? radarEntry.brand : 'Unknown';
+                const model = typeof radarEntry.model === 'string' ? radarEntry.model : undefined;
+                const info = {
                     name: typeof radarEntry.name === 'string'
                         ? radarEntry.name
-                        : typeof radarEntry.model === 'string'
-                            ? `${typeof radarEntry.brand === 'string' ? radarEntry.brand : ''} ${radarEntry.model}`.trim()
+                        : model
+                            ? `${brand === 'Unknown' ? '' : brand} ${model}`.trim()
                             : radarId,
-                    brand: typeof radarEntry.brand === 'string' ? radarEntry.brand : 'Unknown',
-                    status: status,
-                    spokesPerRevolution: Number(capabilities.spokesPerRevolution || 2048),
-                    maxSpokeLen: Number(capabilities.maxSpokeLength || 512),
-                    range: Number(rangeCtrl?.value ?? 1852),
-                    controls: mapControls(controls),
-                    ...(legend ? { legend } : {})
+                    brand,
+                    radarIpAddress: typeof radarEntry.radarIpAddress === 'string' ? radarEntry.radarIpAddress : ''
                 };
+                if (model)
+                    info.model = model;
+                // spokeDataUrl / streamUrl are intentionally omitted so clients use
+                // signalk-server's own endpoints (…/radars/{id}/spokes and
+                // /signalk/v1/stream), which reach the radar through this plugin even
+                // when mayara runs on another host or container.
+                return info;
             }
             catch (err) {
                 debug(`getRadarInfo error for ${radarId}: ${err instanceof Error ? err.message : String(err)}`);
@@ -122,6 +66,11 @@ function createRadarProvider(client, app) {
                     id: radarId,
                     timestamp: new Date().toISOString(),
                     status: status,
+                    // Forward mayara's controls verbatim. mayara already reports each
+                    // control the way the Radar API expects — auto-capable controls
+                    // (gain/sea/…) always carry a boolean `auto`, enum/list controls carry
+                    // their label string — so no normalisation is needed here, and /state
+                    // and /controls stay byte-identical to mayara's own responses.
                     controls: controls
                 };
             }
