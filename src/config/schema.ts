@@ -1,4 +1,4 @@
-import { Type, Static } from '@sinclair/typebox'
+import { Type, type Static } from 'typebox'
 
 export const ConfigSchema = Type.Object({
   managedContainer: Type.Boolean({

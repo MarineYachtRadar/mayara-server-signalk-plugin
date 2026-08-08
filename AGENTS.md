@@ -235,5 +235,11 @@ The mayara GUI is proxied through Signal K at `/plugins/<id>/gui/` so only the S
 - Signal K Server ≥ 2.31.0 (v3.4.0 Radar API requirement; the lean `RadarInfo` and the `{ version, radars }` list land in 2.31.0)
 - signalk-container ≥ 1.6.0 (declared in `signalk.requires`; intentionally **not** an npm `peerDependency`. It's a cross-plugin runtime dependency discovered at runtime via `globalThis.__signalk_containerManager` and installed through Signal K's appstore, not something npm should resolve. Declaring it as a peer made npm enforce the version range, which broke `@beta`/prerelease installs with ERESOLVE because npm excludes prereleases from plain `>=` ranges.)
 - Node ≥ engines floor in `package.json` (CI matrix tests Node 22 and 24)
+- **`typebox`, not `@sinclair/typebox`.** TypeBox 1.x ships as the _unscoped_
+  `typebox` package; the scoped one is a different package frozen at 0.34.x. It
+  is ESM-only (no `require` export condition), which is why this move had to
+  wait for the ESM migration. `@sinclair/typebox` may still appear in
+  `node_modules` — it arrives transitively via `@signalk/server-api` and is not
+  ours.
 
 When bumping the Node engines floor, update **all** of: `package.json` engines, `package.json` `@types/node`, `.github/dependabot.yml` comment, and the README prerequisites line.
