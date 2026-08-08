@@ -143,6 +143,46 @@ describe('createRadarProvider', () => {
     }
   })
 
+  it('getState maps every mayara power state', async () => {
+    // mayara's power control declares 0 Off, 1 Standby, 2 Transmit,
+    // 3 Preparing, 4 Fault (see its `descriptions` map). Preparing is the
+    // Radar API's `warming`. Fault has no equivalent, so it reports `off` —
+    // the radar is genuinely unusable, and the fault surfaces via notifications.
+    const cases: Array<[number, string]> = [
+      [0, 'off'],
+      [1, 'standby'],
+      [2, 'transmit'],
+      [3, 'warming'],
+      [4, 'off']
+    ]
+    for (const [value, expected] of cases) {
+      const client = createMockClient({
+        getControls: vi.fn().mockResolvedValue({ power: { value } })
+      })
+      const provider = createRadarProvider(client, createMockApp())
+      const state = await provider.getState?.('radar-0')
+      expect(state?.status, `power=${value}`).toBe(expected)
+    }
+  })
+
+  it('getState reports no state when the power reading is unusable', async () => {
+    // The regression this guards: every value that was not 1 or 2 used to map
+    // to `off`, so a missing control — a transiently failed fetch, a 401 from
+    // an expired session — reported the radar as confidently powered down. An
+    // operator watching a transmitting radar flip to "Off" concludes the radar
+    // died, when only the read did. Returning null surfaces as unknown instead.
+    for (const power of [undefined, null, 'nonsense', 99]) {
+      const client = createMockClient({
+        getControls: vi
+          .fn()
+          .mockResolvedValue(power === undefined ? {} : { power: { value: power } })
+      })
+      const provider = createRadarProvider(client, createMockApp())
+      const state = await provider.getState?.('radar-0')
+      expect(state, `power=${JSON.stringify(power)}`).toBeNull()
+    }
+  })
+
   it('setPower proxies to client', async () => {
     const setControlFn = vi.fn().mockResolvedValue({ success: true })
     const client = createMockClient({

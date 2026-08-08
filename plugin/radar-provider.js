@@ -1,3 +1,34 @@
+/**
+ * mayara's `power` enum, per the control's own `descriptions` map:
+ * 0 Off, 1 Standby, 2 Transmit, 3 Preparing, 4 Fault.
+ *
+ * `warming` is the Radar API's name for what mayara calls "Preparing" — the
+ * magnetron warm-up between standby and transmit.
+ *
+ * Fault has no Radar API equivalent. It maps to `off` because the radar is
+ * genuinely not usable, which is the closest honest answer the enum allows;
+ * the fault itself surfaces through notifications, not through this field.
+ */
+const POWER_TO_STATUS = {
+    0: 'off',
+    1: 'standby',
+    2: 'transmit',
+    3: 'warming',
+    4: 'off'
+};
+/**
+ * Map a raw mayara power value to a Radar API status, or null when there is no
+ * usable reading.
+ *
+ * Returning null matters: the previous implementation treated every value that
+ * was not 1 or 2 as `off`, so a missing control — a transiently failed fetch, a
+ * 401 from an expired session — reported the radar as confidently powered down.
+ * An operator watching a transmitting radar flip to "Off" reasonably concludes
+ * the radar died, when in fact only the read did.
+ */
+function toRadarStatus(value) {
+    return typeof value === 'number' ? (POWER_TO_STATUS[value] ?? null) : null;
+}
 export function createRadarProvider(client, app) {
     const debug = app.debug.bind(app);
     return {
@@ -58,11 +89,19 @@ export function createRadarProvider(client, app) {
             try {
                 const controls = await client.getControls(radarId);
                 const powerCtrl = controls.power;
-                const status = powerCtrl?.value === 2 ? 'transmit' : powerCtrl?.value === 1 ? 'standby' : 'off';
+                const status = toRadarStatus(powerCtrl?.value);
+                if (status === null) {
+                    // No usable power reading — the control was absent or carried a value
+                    // we do not have a mapping for. Report "no state" rather than
+                    // guessing: a null here surfaces as unknown, whereas returning a
+                    // state would assert something we cannot substantiate.
+                    debug(`getState for ${radarId}: no usable power value (${JSON.stringify(powerCtrl?.value)})`);
+                    return null;
+                }
                 return {
                     id: radarId,
                     timestamp: new Date().toISOString(),
-                    status: status,
+                    status,
                     // Forward mayara's controls verbatim. mayara already reports each
                     // control the way the Radar API expects — auto-capable controls
                     // (gain/sea/…) always carry a boolean `auto`, enum/list controls carry
