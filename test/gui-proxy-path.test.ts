@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { rewriteGuiProxyPath } from '../src/gui-proxy-path'
+import { rewriteGuiProxyPath } from '../src/gui-proxy-path.js'
 
 describe('rewriteGuiProxyPath', () => {
   it('passes the bare /signalk discovery probe through unchanged', () => {

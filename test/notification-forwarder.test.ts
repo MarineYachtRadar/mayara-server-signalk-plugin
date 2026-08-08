@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { NotificationForwarder } from '../src/notification-forwarder'
+import { NotificationForwarder } from '../src/notification-forwarder.js'
 import http from 'http'
 import { WebSocketServer, WebSocket } from 'ws'
 

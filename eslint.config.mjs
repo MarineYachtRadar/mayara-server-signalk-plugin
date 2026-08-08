@@ -32,14 +32,17 @@ export default tseslint.config(
     // Everything else is outside the project, so the type-aware parser
     // (parserOptions.project) errors on it — which is what a repo-wide
     // `eslint .` (as CodeRabbit runs) hits on the root config files and the
-    // hand-written .js config panel (bundled by webpack, not compiled by tsc,
-    // and following its own JSX style). The lint script already globs only
-    // src/test *.ts; ignore the rest here so the two stay consistent.
+    // hand-written .js/.jsx config panel (bundled by Vite, not compiled by
+    // tsc, and following its own JSX style — it has its own
+    // src/configpanel/tsconfig.json, typechecked by `npm run typecheck:panel`).
+    // The lint script already globs only src/test *.ts; ignore the rest here
+    // so the two stay consistent.
     ignores: [
       'plugin/**',
       'public/**',
       'node_modules/**',
       'src/configpanel/**/*.js',
+      'src/configpanel/**/*.jsx',
       'build.js',
       '**/*.config.js',
       '**/*.config.mjs',

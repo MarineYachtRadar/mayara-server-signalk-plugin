@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { SpokeForwarder } from '../src/spoke-forwarder'
+import { SpokeForwarder } from '../src/spoke-forwarder.js'
 import http from 'http'
 import { WebSocketServer, WebSocket } from 'ws'
 

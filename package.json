@@ -3,14 +3,16 @@
   "version": "1.4.4",
   "description": "MaYaRa Radar - Connect SignalK to mayara-server",
   "main": "plugin/index.js",
+  "type": "module",
   "signalk-plugin-enabled-by-default": true,
   "scripts": {
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" && eslint --fix 'src/**/*.ts' 'test/**/*.ts' && npm run format:other",
     "format:other": "prettier --write \"**/*.md\" \"*.{json,yml,yaml,mjs,js}\" \".github/**/*.{yml,yaml}\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"**/*.md\" \"*.{json,yml,yaml,mjs,js}\" \".github/**/*.{yml,yaml}\"",
     "lint": "eslint 'src/**/*.ts' 'test/**/*.ts'",
-    "build": "tsc && node build.js && webpack",
-    "build:config": "webpack",
+    "build": "tsc && npm run typecheck:panel && node build.js && vite build",
+    "build:config": "vite build",
+    "typecheck:panel": "tsc -p src/configpanel --noEmit",
     "build:all": "npm run lint && npm run build && npm run test",
     "test": "vitest run",
     "prepublishOnly": "npm run build"
@@ -54,14 +56,13 @@
     "ws": "^8.14.0"
   },
   "devDependencies": {
-    "@babel/core": "^7.29.0",
-    "@babel/preset-react": "^7.28.5",
     "@eslint/js": "^10.0.1",
+    "@module-federation/vite": "^1.20.5",
     "@signalk/server-api": "^2.31.0-beta.1",
     "@types/express": "^5.0.0",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.5.0",
-    "babel-loader": "^10.1.1",
+    "@vitejs/plugin-react": "^6.0.5",
     "eslint": "^10.3.0",
     "eslint-config-prettier": "^10.0.0",
     "eslint-plugin-prettier": "^5.0.0",
@@ -70,9 +71,8 @@
     "react-dom": "^19.2.4",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.0.0",
-    "vitest": "^4.1.5",
-    "webpack": "^5.105.4",
-    "webpack-cli": "^7.0.2"
+    "vite": "^8.2.1",
+    "vitest": "^4.1.5"
   },
   "repository": {
     "type": "git",

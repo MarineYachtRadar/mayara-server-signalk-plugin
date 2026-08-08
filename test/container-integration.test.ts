@@ -7,7 +7,7 @@ import type {
   ContainerResourceLimits,
   UpdateCheckResult,
   UpdateRegistration
-} from '../src/types'
+} from '../src/types.js'
 
 // =============================================================================
 // Mocks for the plugin's other collaborators
@@ -17,7 +17,7 @@ import type {
 // would otherwise try to make real network calls when start() runs, so we
 // mock the modules at import time.
 
-vi.mock('../src/mayara-client', () => {
+vi.mock('../src/mayara-client.js', () => {
   // A `new`-able stand-in. `vi.fn().mockImplementation(() => ({...}))`
   // returns an arrow function, which throws "is not a constructor" when
   // the plugin does `new MayaraClient(...)`, so use a plain function.
@@ -34,11 +34,11 @@ vi.mock('../src/mayara-client', () => {
   return { MayaraClient }
 })
 
-vi.mock('../src/radar-provider', () => ({
+vi.mock('../src/radar-provider.js', () => ({
   createRadarProvider: vi.fn().mockReturnValue({})
 }))
 
-vi.mock('../src/spoke-forwarder', () => ({
+vi.mock('../src/spoke-forwarder.js', () => ({
   SpokeForwarder: vi.fn().mockImplementation(() => ({
     start: vi.fn(),
     stop: vi.fn(),
@@ -49,9 +49,9 @@ vi.mock('../src/spoke-forwarder', () => ({
 // Default-stub the token flow so tests that aren't specifically about
 // it don't issue stray HTTP requests against a non-existent local
 // Signal K server. Token-flow tests override per-call via vi.mocked().
-vi.mock('../src/signalk-token', async () => {
+vi.mock('../src/signalk-token.js', async () => {
   const actual =
-    await vi.importActual<typeof import('../src/signalk-token')>('../src/signalk-token')
+    await vi.importActual<typeof import('../src/signalk-token.js')>('../src/signalk-token.js')
   return {
     ...actual,
     readCachedToken: vi.fn(() => undefined),
@@ -326,7 +326,7 @@ async function loadPlugin(
   vi.resetModules()
   // The plugin uses CommonJS `module.exports = function(app)`. Vitest's
   // dynamic import wraps that as the default export.
-  const mod = (await import('../src/index')) as unknown as {
+  const mod = (await import('../src/index.js')) as unknown as {
     default: (a: unknown) => LoadedPlugin['plugin']
   }
   const factory = mod.default
@@ -362,8 +362,8 @@ async function loadPlugin(
 // Tests
 // =============================================================================
 
-function loadTokenMock(): Promise<typeof import('../src/signalk-token')> {
-  return import('../src/signalk-token')
+function loadTokenMock(): Promise<typeof import('../src/signalk-token.js')> {
+  return import('../src/signalk-token.js')
 }
 
 beforeEach(async () => {
@@ -400,7 +400,7 @@ describe('mayara-server-signalk-plugin container integration', () => {
       globalThis.__signalk_containerManager = containers
       const app = makeMockApp()
       vi.resetModules()
-      const mod = (await import('../src/index')) as unknown as {
+      const mod = (await import('../src/index.js')) as unknown as {
         default: (a: unknown) => LoadedPlugin['plugin']
       }
       const plugin = mod.default(app)
@@ -645,7 +645,7 @@ describe('mayara-server-signalk-plugin container integration', () => {
       globalThis.__signalk_containerManager = containers
       const app = makeMockApp()
       vi.resetModules()
-      const mod = (await import('../src/index')) as unknown as {
+      const mod = (await import('../src/index.js')) as unknown as {
         default: (a: unknown) => { start: (c: unknown) => void; stop: () => void | Promise<void> }
       }
       const plugin = mod.default(app)

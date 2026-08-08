@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
-import { createRadarProvider } from '../src/radar-provider'
-import { MayaraClient } from '../src/mayara-client'
-import { MayaraServerAPI } from '../src/types'
+import { createRadarProvider } from '../src/radar-provider.js'
+import { MayaraClient } from '../src/mayara-client.js'
+import { MayaraServerAPI } from '../src/types.js'
 
 function createMockClient(overrides: Partial<MayaraClient> = {}): MayaraClient {
   return {

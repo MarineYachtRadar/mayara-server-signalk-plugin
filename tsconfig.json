@@ -1,7 +1,15 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "node16",
+
+    // The package is "type": "module", so the emitted plugin/ must be real ESM.
+    // nodenext resolution is what makes tsc enforce Node's actual ESM rules —
+    // notably that relative imports carry the emitted `.js` extension. Under
+    // "bundler" resolution tsc accepts extensionless specifiers and emits them
+    // verbatim, which Node then rejects at load with ERR_MODULE_NOT_FOUND.
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+
     "lib": ["ES2022"],
     "outDir": "plugin",
     "rootDir": "src",
@@ -12,9 +20,10 @@
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
-    "resolveJsonModule": true,
-    "moduleResolution": "node16"
+    "resolveJsonModule": true
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "plugin", "test"]
+  // src/configpanel is a browser bundle (JSX + DOM types) with its own
+  // tsconfig; letting it in here would force those into the Node compile.
+  "exclude": ["node_modules", "plugin", "test", "src/configpanel"]
 }

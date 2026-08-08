@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import http from 'http'
-import { MayaraClient } from '../src/mayara-client'
+import { MayaraClient } from '../src/mayara-client.js'
 
 let server: http.Server | undefined
 let serverPort: number
