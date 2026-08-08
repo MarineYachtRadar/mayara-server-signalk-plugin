@@ -100,9 +100,14 @@ The plugin sets sensible default resource caps so a runaway container can't take
 | Setting      | Default | Why                                                                   |
 | ------------ | ------- | --------------------------------------------------------------------- |
 | `cpus`       | `2`     | Mayara processing peaks ≈ 1 core; headroom for spikes and multi-radar |
-| `memory`     | `512m`  | Hard memory cap, OOM-killed if exceeded                               |
-| `memorySwap` | `512m`  | = memory → swap disabled (recommended on Pi/eMMC)                     |
+| `memory`     | `1g`    | Hard memory cap, OOM-killed if exceeded                               |
+| `memorySwap` | `1g`    | = memory → swap disabled (recommended on Pi/eMMC)                     |
 | `pidsLimit`  | `200`   | Bounds runaway thread leaks                                           |
+
+A dual-range radar with ARPA active sits around 380 MB steady-state, so the previous
+512 MB cap left almost no headroom: the container spent its time in memory reclaim
+rather than being OOM-killed, which looks like a sluggish radar picture rather than
+a crash. 1 GB restores headroom.
 
 Tested on a Pi 5 8GB with a Garmin xHD2 at 24 NM range. If your setup needs different limits (e.g. multiple radars, larger range, weaker hardware), override per-field via signalk-container's plugin config under **Per-container resource overrides**:
 
