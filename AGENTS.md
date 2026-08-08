@@ -78,6 +78,36 @@ When mayara grows the status model, this plugin must **forward the new fields ve
 - `npm run typecheck:panel` — typecheck the browser-side config panel (`src/configpanel/tsconfig.json`)
 - `npm run test` — vitest
 - `npm run build:all` — lint + build + test (run this before every commit)
+- `npm run test:e2e` — **full-stack check, run by hand** (see below)
+
+### End-to-end harness
+
+`test/e2e/run-e2e.mjs` boots a **real signalk-server** with this plugin really
+installed in a throwaway config dir, pointed at a **real mayara-server**. Nothing
+is mocked. It catches the failures the unit tests structurally cannot: the plugin
+failing to load under ESM, the Radar API provider not registering with the
+server, the GUI reverse proxy mis-routing, and the federated config panel not
+being served.
+
+It is deliberately **not** part of `npm test`, `build:all` or CI — it needs a
+running mayara-server and, for the radar assertions, actual hardware. The vitest
+glob is `test/**/*.test.ts`, so the `.mjs` harness is excluded automatically.
+
+The harness runs `npm run build` itself before packing, because `npm pack` does
+**not** trigger `prepublishOnly` — without that step it would silently test a
+stale `plugin/` and `public/` from a previous run.
+
+Prerequisites: a built `signalk-server` checkout (`npm run build` there — it
+emits to `dist/`, not `lib/`) and a reachable mayara-server. Overrides:
+`MAYARA_URL` (default `http://127.0.0.1:6502`), `SK_REPO`
+(default `~/dev/xxx_signalk-server`), `SK_PORT` (default `3999`, deliberately not
+3000 so it cannot collide with a real server), and `KEEP=1` to retain the
+throwaway config dir plus `server.log` for inspection.
+
+Note the spoke-stream assertion passes on an _open socket with no frames_ when
+the radar is in standby — a standby radar emits nothing, and the open socket is
+already proof that `SpokeForwarder` registered the stream. Only a transmitting
+radar will report frame counts.
 
 ## Pull request workflow
 
