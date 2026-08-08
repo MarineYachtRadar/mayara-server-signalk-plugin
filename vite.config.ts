@@ -33,7 +33,7 @@ export default defineConfig({
       name: federationName,
       filename: 'remoteEntry.js',
       exposes: {
-        './PluginConfigurationPanel': './src/configpanel/PluginConfigurationPanel.jsx'
+        './PluginConfigurationPanel': './src/configpanel/PluginConfigurationPanel.tsx'
       },
       shared: {
         react: {
@@ -55,7 +55,7 @@ export default defineConfig({
   build: {
     // Federation supplies the real entry (remoteEntry.js); without this
     // rolldown looks for an index.html it will never find.
-    rollupOptions: { input: './src/configpanel/index.js' },
+    rollupOptions: { input: './src/configpanel/index.ts' },
     outDir: 'public',
     // The published package ships public/ alongside the app icon and the
     // build.js redirect page; wiping the directory would take them with it.

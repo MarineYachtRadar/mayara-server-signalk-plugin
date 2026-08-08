@@ -245,7 +245,6 @@ export default function (app) {
                     // the upstream ClientRequest with a corrected Content-Length.
                     // For GET / HEAD it's a no-op (req.body is undefined).
                     proxyReq: fixRequestBody,
-                    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- responseInterceptor returns a function whose Promise return value is awaited by node-http-proxy internally.
                     proxyRes: responseInterceptor((buffer, proxyRes, req) => {
                         const ct = proxyRes.headers['content-type'] ?? '';
                         // Only the radar-list JSON contains stream URLs we need

@@ -6,10 +6,10 @@
   "type": "module",
   "signalk-plugin-enabled-by-default": true,
   "scripts": {
-    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" && eslint --fix 'src/**/*.ts' 'test/**/*.ts' && npm run format:other",
+    "format": "prettier --write \"src/**/*.ts\" \"src/**/*.tsx\" \"test/**/*.ts\" && eslint --fix 'src/**/*.ts' 'src/**/*.tsx' 'test/**/*.ts' && npm run format:other",
     "format:other": "prettier --write \"**/*.md\" \"*.{json,yml,yaml,mjs,js}\" \".github/**/*.{yml,yaml}\"",
-    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"**/*.md\" \"*.{json,yml,yaml,mjs,js}\" \".github/**/*.{yml,yaml}\"",
-    "lint": "eslint 'src/**/*.ts' 'test/**/*.ts'",
+    "format:check": "prettier --check \"src/**/*.ts\" \"src/**/*.tsx\" \"test/**/*.ts\" \"**/*.md\" \"*.{json,yml,yaml,mjs,js}\" \".github/**/*.{yml,yaml}\"",
+    "lint": "eslint 'src/**/*.ts' 'src/**/*.tsx' 'test/**/*.ts'",
     "build": "tsc && npm run typecheck:panel && node build.js && vite build",
     "build:config": "vite build",
     "typecheck:panel": "tsc -p src/configpanel --noEmit",
@@ -47,7 +47,7 @@
     "docs/**/*"
   ],
   "engines": {
-    "node": ">=22",
+    "node": ">=22.15.0",
     "signalk": ">=2.31.0"
   },
   "dependencies": {
@@ -61,6 +61,8 @@
     "@signalk/server-api": "^2.31.0-beta.1",
     "@types/express": "^5.0.0",
     "@types/node": "^22.0.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
     "@types/ws": "^8.5.0",
     "@vitejs/plugin-react": "^6.0.5",
     "eslint": "^10.3.0",
