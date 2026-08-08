@@ -1,14 +1,14 @@
-import { Static } from '@sinclair/typebox';
-export declare const ConfigSchema: import("@sinclair/typebox").TObject<{
-    managedContainer: import("@sinclair/typebox").TBoolean;
-    mayaraVersion: import("@sinclair/typebox").TString;
-    mayaraArgs: import("@sinclair/typebox").TArray<import("@sinclair/typebox").TString>;
-    requestSignalkToken: import("@sinclair/typebox").TBoolean;
-    host: import("@sinclair/typebox").TString;
-    port: import("@sinclair/typebox").TNumber;
-    secure: import("@sinclair/typebox").TBoolean;
-    discoveryPollInterval: import("@sinclair/typebox").TNumber;
-    reconnectInterval: import("@sinclair/typebox").TNumber;
+import { Type, type Static } from 'typebox';
+export declare const ConfigSchema: Type.TObject<{
+    managedContainer: Type.TBoolean;
+    mayaraVersion: Type.TString;
+    mayaraArgs: Type.TArray<Type.TString>;
+    requestSignalkToken: Type.TBoolean;
+    host: Type.TString;
+    port: Type.TNumber;
+    secure: Type.TBoolean;
+    discoveryPollInterval: Type.TNumber;
+    reconnectInterval: Type.TNumber;
 }>;
 export type Config = Static<typeof ConfigSchema>;
 export declare const SCHEMA_DEFAULTS: Config;
