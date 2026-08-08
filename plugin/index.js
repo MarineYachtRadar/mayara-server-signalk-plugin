@@ -181,12 +181,30 @@ module.exports = function (app) {
                     return raw;
                 }
             };
+            // mayara base URL for the GUI's own assets and mayara-specific endpoints.
+            const mayaraBase = () => {
+                const host = currentSettings?.host ?? 'localhost';
+                const port = currentSettings?.port ?? 6502;
+                const proto = currentSettings?.secure ? 'https' : 'http';
+                return `${proto}://${host}:${port}`;
+            };
             const guiProxy = (0, http_proxy_middleware_1.createProxyMiddleware)({
-                router: () => {
-                    const host = currentSettings?.host ?? 'localhost';
-                    const port = currentSettings?.port ?? 6502;
-                    const proto = currentSettings?.secure ? 'https' : 'http';
-                    return `${proto}://${host}:${port}`;
+                router: (req) => {
+                    // Radar data — the radar REST API, the control stream, and the spoke
+                    // stream — is all served under `/signalk/...` by the Signal K server
+                    // this plugin registered with. Point those requests at the local SK
+                    // loopback so the proxied GUI runs against full Signal K, proving the
+                    // radar API behaves identically either way. Everything else (the GUI's
+                    // own static assets and mayara-specific `/v2` recordings/debug) goes to
+                    // mayara. Requests carry the `/plugins/<id>/gui` mount stripped, so the
+                    // path here is e.g. `/signalk/v2/...` or `/viewer.js`.
+                    const path = req.url ?? '';
+                    if (path === '/signalk' || path.startsWith('/signalk/')) {
+                        const sk = resolveSignalkLoopback();
+                        const httpScheme = sk.scheme === 'wss' ? 'https' : 'http';
+                        return `${httpScheme}://127.0.0.1:${sk.port}`;
+                    }
+                    return mayaraBase();
                 },
                 // `router.use('/gui', guiProxy)` strips the `/gui` prefix
                 // before the middleware sees the request, so the proxy
@@ -197,6 +215,9 @@ module.exports = function (app) {
                 // API roots through and only prefixes genuine assets with `/gui`.
                 target: 'http://localhost:6502', // overridden by `router`
                 changeOrigin: true,
+                // Accept the Signal K loopback's self-signed cert when SK runs on https
+                // (the token flow connects the same way). No-op for the http targets.
+                secure: false,
                 // Do NOT let the middleware auto-subscribe to the server's `upgrade`
                 // event. It would see the raw `/plugins/<id>/gui/signalk/...` URL,
                 // which `pathRewrite` can't strip the mount prefix from (it only
@@ -235,14 +256,16 @@ module.exports = function (app) {
                         if (ct.includes('application/json') &&
                             req.url?.includes('/signalk/v2/api/vessels/self/radars')) {
                             try {
-                                const json = JSON.parse(buffer.toString('utf8'));
-                                for (const radar of Object.values(json)) {
+                                const parsed = JSON.parse(buffer.toString('utf8'));
+                                const json = parsed;
+                                const radars = json.radars ?? json;
+                                for (const radar of Object.values(radars)) {
                                     if (radar.streamUrl)
                                         radar.streamUrl = rewriteStreamUrl(radar.streamUrl);
                                     if (radar.spokeDataUrl)
                                         radar.spokeDataUrl = rewriteStreamUrl(radar.spokeDataUrl);
                                 }
-                                return Promise.resolve(JSON.stringify(json));
+                                return Promise.resolve(JSON.stringify(parsed));
                             }
                             catch {
                                 return Promise.resolve(buffer);
@@ -962,6 +985,16 @@ module.exports = function (app) {
             notificationForwarder = new notification_forwarder_1.NotificationForwarder(app, {
                 pluginId: PLUGIN_ID,
                 url: client.getStateStreamUrl(),
+                // Relay both guard-zone notifications and radar control/target state
+                // (radars.{id}.controls.*) onto the host SK server's own v1 stream, so
+                // a client subscribed there sees live radar state without connecting to
+                // mayara directly. This is the "out" half of the Radar API control
+                // stream; the "in" half (control changes) is the PUT handlers below.
+                subscriptions: [
+                    { path: 'notifications.*', policy: 'instant' },
+                    { path: 'radars.*', policy: 'instant' }
+                ],
+                pathPrefixes: ['notifications.', 'radars.'],
                 debug: app.debug.bind(app),
                 reconnectInterval: (settings.reconnectInterval || 5) * 1000
             });
@@ -1076,6 +1109,13 @@ module.exports = function (app) {
                 else {
                     app.debug('binaryStreamManager not available - spoke streaming disabled');
                 }
+                // Register Signal K PUT handlers for this radar's controls, so a client
+                // can change a control by PUTting radars.<id>.controls.<control> on the
+                // host SK server (over the v1 stream or REST) and have it forwarded to
+                // mayara — the "in" half of the Radar API control stream. Fire-and-forget:
+                // it fetches the control list from mayara. Re-registration on a later
+                // rediscovery is idempotent (same source overwrites).
+                void registerControlPutHandlers(radarId);
             }
         }
         for (const radarId of knownRadars) {
@@ -1088,6 +1128,41 @@ module.exports = function (app) {
                     spokeForwarders.delete(radarId);
                 }
             }
+        }
+    }
+    // Register a Signal K PUT handler for every control mayara reports on a radar,
+    // at path radars.<id>.controls.<control>. Each handler forwards the put value
+    // verbatim to mayara's control PUT (the same call the Radar API's REST
+    // setControl uses), so a value read off the v1 stream can be echoed back to
+    // change it. Read-only controls (modelName, firmwareVersion, …) get a handler
+    // too, but mayara rejects the write. Registration is idempotent on rediscovery
+    // because the source (PLUGIN_ID) key overwrites.
+    async function registerControlPutHandlers(radarId) {
+        if (!client)
+            return;
+        try {
+            const controls = await client.getControls(radarId);
+            const controlIds = Object.keys(controls);
+            for (const controlId of controlIds) {
+                const path = `radars.${radarId}.controls.${controlId}`;
+                app.registerPutHandler('vessels.self', path, (_context, _path, value, cb) => {
+                    if (!client)
+                        return { state: 'FAILED', statusCode: 503 };
+                    client
+                        .setControl(radarId, controlId, value)
+                        .then(() => {
+                        cb({ state: 'COMPLETED', statusCode: 200 });
+                    })
+                        .catch((err) => {
+                        cb({ state: 'COMPLETED', statusCode: 400, message: errMsg(err) });
+                    });
+                    return { state: 'PENDING' };
+                }, PLUGIN_ID);
+            }
+            app.debug(`Registered ${controlIds.length} control PUT handler(s) for ${radarId}`);
+        }
+        catch (err) {
+            app.debug(`Failed to register PUT handlers for ${radarId}: ${errMsg(err)}`);
         }
     }
     async function pollForRadarChanges(settings) {

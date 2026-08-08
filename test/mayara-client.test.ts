@@ -35,6 +35,24 @@ describe('MayaraClient', () => {
     expect(result).toEqual({ 'radar-0': { name: 'Test', brand: 'Furuno' } })
   })
 
+  it('unwraps the { version, radars } envelope so callers key by radar id', async () => {
+    serverPort = await createTestServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(
+        JSON.stringify({
+          version: '3.4.0',
+          radars: { 'radar-0': { name: 'Test', brand: 'Furuno' } }
+        })
+      )
+    })
+
+    const client = new MayaraClient({ host: 'localhost', port: serverPort })
+    const result = await client.getRadars()
+    // Bare map — not the envelope — so Object.keys yields ids, not version/radars.
+    expect(Object.keys(result)).toEqual(['radar-0'])
+    expect(result).toEqual({ 'radar-0': { name: 'Test', brand: 'Furuno' } })
+  })
+
   it('makes PUT requests with body', async () => {
     let receivedBody = ''
     serverPort = await createTestServer((req, res) => {
@@ -78,6 +96,15 @@ describe('MayaraClient', () => {
     const client = new MayaraClient({ host: '192.168.1.10', port: 6502, secure: true })
     expect(client.getSpokeStreamUrl('radar-0')).toBe(
       'wss://192.168.1.10:6502/signalk/v2/api/vessels/self/radars/radar-0/spokes'
+    )
+  })
+
+  it('requests the state stream with subscribe=none so it never gets nav/AIS', () => {
+    const client = new MayaraClient({ host: '192.168.1.10', port: 6502 })
+    // The forwarder opts out of own-ship data (Signal K default `self` streams
+    // navigation.*) and subscribes only to radars.*/notifications.* itself.
+    expect(client.getStateStreamUrl()).toBe(
+      'ws://192.168.1.10:6502/signalk/v1/stream?subscribe=none'
     )
   })
 

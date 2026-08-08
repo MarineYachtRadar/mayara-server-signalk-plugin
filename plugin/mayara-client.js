@@ -63,7 +63,12 @@ class MayaraClient {
         });
     }
     async getRadars() {
-        return (await this.request('GET', API_BASE));
+        const response = (await this.request('GET', API_BASE));
+        // mayara returns the `{ version, radars }` envelope; unwrap to the bare
+        // `{ id: RadarInfo }` map so callers can key by radar id (and `Object.keys`
+        // yields radar ids, not `version`/`radars`). Tolerate an older bare response.
+        const radars = response.radars;
+        return (radars && typeof radars === 'object' ? radars : response);
     }
     async getCapabilities(radarId) {
         return this.request('GET', `${API_BASE}/${radarId}/capabilities`);
@@ -98,13 +103,20 @@ class MayaraClient {
         return `${wsProtocol}://${this.host}:${this.port}${API_BASE}/${radarId}/targets/stream`;
     }
     /**
-     * Signal K v1 stream — the same WebSocket the built-in GUI subscribes
-     * to. Used by NotificationForwarder to listen for `notifications.*`
-     * deltas (e.g. guard-zone alarms) and republish them upstream.
+     * mayara's Signal K v1 stream. Used by NotificationForwarder to relay
+     * `notifications.*` and `radars.*` deltas upstream.
+     *
+     * `?subscribe=none` is deliberate: under Signal K's subscription model the
+     * default (`self`) streams own-ship `navigation.*` too, but the plugin must
+     * NOT forward nav — mayara only has it because it received it from Signal K
+     * in the first place, so re-publishing it would loop it back. Starting from
+     * `none` and letting the forwarder subscribe to exactly `radars.*` /
+     * `notifications.*` keeps nav (and AIS) out, and stays correct whether mayara
+     * treats a later subscribe as additive (SK-compliant) or narrowing.
      */
     getStateStreamUrl() {
         const wsProtocol = this.secure ? 'wss' : 'ws';
-        return `${wsProtocol}://${this.host}:${this.port}/signalk/v1/stream`;
+        return `${wsProtocol}://${this.host}:${this.port}/signalk/v1/stream?subscribe=none`;
     }
     close() {
         // No persistent connections to close for HTTP client
