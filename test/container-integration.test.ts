@@ -497,21 +497,53 @@ describe('mayara-server-signalk-plugin container integration', () => {
       await plugin.stop()
     })
 
-    it('awaits containers.whenReady() before calling ensureRunning', async () => {
-      // signalk-container 1.6.0 exposes whenReady() as the canonical
-      // "wait for runtime detection to settle" signal. Mayara must
-      // await it before any other container API call, otherwise
-      // ensureRunning would race against runtime probing on a cold
-      // SK boot. Use vitest's invocationCallOrder to assert
-      // whenReady was invoked strictly before ensureRunning.
+    it('waits for runtime detection to settle before calling ensureRunning', async () => {
+      // The invariant: ensureRunning must never race runtime probing on a
+      // cold SK boot. signalk-container-helper enforces it by awaiting
+      // whenReady() — but only when getRuntime() is still null, since a
+      // runtime that already resolved means detection has settled and there
+      // is nothing left to wait for.
+      //
+      // This mock returns a runtime synchronously, so the fast path is
+      // expected and whenReady() is legitimately skipped. Assert the property
+      // that matters (detection settled first), not the call that used to
+      // implement it.
       const { containers, plugin } = await loadPlugin()
-      expect(containers.whenReady).toHaveBeenCalledTimes(1)
-      const whenReadyOrder = (
-        containers.whenReady as unknown as { mock: { invocationCallOrder: number[] } }
-      ).mock.invocationCallOrder[0]
-      const ensureRunningOrder = (
-        containers.ensureRunning as unknown as { mock: { invocationCallOrder: number[] } }
-      ).mock.invocationCallOrder[0]
+      expect(containers.getRuntime()).not.toBeNull()
+      expect(containers._calls.ensureRunning.length).toBe(1)
+      await plugin.stop()
+    })
+
+    it('awaits whenReady() when runtime detection has not settled yet', async () => {
+      // The slow path: getRuntime() is null until whenReady() resolves, which
+      // is the cold-boot case the fast path above cannot cover.
+      const containers = makeMockContainerManager()
+      let settled = false
+      containers.getRuntime = vi.fn(() =>
+        settled ? { runtime: 'podman' as const, version: '5.0.0', isPodmanDockerShim: false } : null
+      )
+      containers.whenReady = vi.fn(() => {
+        settled = true
+        return Promise.resolve()
+      })
+      globalThis.__signalk_containerManager = containers
+
+      const app = makeMockApp()
+      vi.resetModules()
+      const mod = (await import('../src/index.js')) as unknown as {
+        default: (a: unknown) => LoadedPlugin['plugin']
+      }
+      const plugin = mod.default(app)
+      plugin.start({ managedContainer: true, mayaraVersion: 'latest' })
+      await vi.waitFor(() => {
+        expect(containers._calls.ensureRunning.length).toBe(1)
+      })
+
+      const whenReadyMock = vi.mocked(containers.whenReady)
+      const ensureRunningMock = vi.mocked(containers.ensureRunning)
+      expect(whenReadyMock).toHaveBeenCalledTimes(1)
+      const whenReadyOrder = whenReadyMock.mock.invocationCallOrder[0]
+      const ensureRunningOrder = ensureRunningMock.mock.invocationCallOrder[0]
       expect(whenReadyOrder).toBeLessThan(ensureRunningOrder)
       await plugin.stop()
     })

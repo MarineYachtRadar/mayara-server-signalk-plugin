@@ -28,6 +28,17 @@ export default tseslint.config(
     }
   },
   {
+    // Test doubles are plain `vi.fn()` stubs on object literals, so referencing
+    // one to assert on it (`vi.mocked(mock.whenReady)`) can never lose a `this`
+    // binding — the rule's real target is methods on classes/prototypes. It
+    // only started firing once signalk-container-helper's typed interfaces
+    // replaced the loose local mirror.
+    files: ['test/**/*.ts'],
+    rules: {
+      '@typescript-eslint/unbound-method': 'off'
+    }
+  },
+  {
     // The config panel is a browser bundle with its own tsconfig (DOM libs +
     // JSX, deliberately kept out of the Node compile), so the type-aware
     // parser needs to be pointed at that project for these files rather than
