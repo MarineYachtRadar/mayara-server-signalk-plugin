@@ -422,8 +422,8 @@ describe('mayara-server-signalk-plugin container integration', () => {
       const { config } = containers._calls.ensureRunning[0]
       expect(config.resources).toEqual({
         cpus: 2,
-        memory: '512m',
-        memorySwap: '512m',
+        memory: '1g',
+        memorySwap: '1g',
         pidsLimit: 200
       })
       await plugin.stop()
@@ -692,8 +692,8 @@ describe('mayara-server-signalk-plugin container integration', () => {
       // Resources still applied on update
       expect(containers._calls.ensureRunning[0].config.resources).toEqual({
         cpus: 2,
-        memory: '512m',
-        memorySwap: '512m',
+        memory: '1g',
+        memorySwap: '1g',
         pidsLimit: 200
       })
       await plugin.stop()

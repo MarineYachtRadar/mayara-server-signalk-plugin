@@ -26,10 +26,15 @@ const GUI_PROXY_PATH = `/plugins/${PLUGIN_ID}/gui`;
  *
  *   signalk-container/doc/plugin-developer-guide.md §"Resource Limits"
  */
+// 1g, not 512m: a dual-range radar with ARPA running sits around 380 MB
+// steady-state — ~75% of the old cap — which leaves no headroom for the blob
+// detector's per-revolution allocations and pushes the runtime into constant
+// reclaim. That shows up to the operator as a sluggish picture rather than as
+// an OOM kill, so it is easy to misread as the plugin being slow.
 const DEFAULT_RESOURCES = {
     cpus: 2,
-    memory: '512m',
-    memorySwap: '512m', // = memory → swap disabled (recommended on Pi/eMMC)
+    memory: '1g',
+    memorySwap: '1g', // = memory → swap disabled (recommended on Pi/eMMC)
     pidsLimit: 200
 };
 /**
