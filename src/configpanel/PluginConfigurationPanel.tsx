@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
-import { deriveVersionsView, runningTagFallback, splitVersions } from './versionsView'
-import type { VersionEntry } from './versionsView'
+import { deriveVersionsView, runningTagFallback, splitVersions } from './versionsView.js'
+import type { VersionEntry } from './versionsView.js'
 
 /** The plugin configuration this panel edits. Mirrors src/config/schema.ts. */
 interface PanelConfig {
@@ -42,7 +42,7 @@ interface UpdateCheckResult {
   error?: string
 }
 
-const S: Record<string, CSSProperties> = {
+const S = {
   root: {
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
     color: '#333',
@@ -174,7 +174,10 @@ const S: Record<string, CSSProperties> = {
   },
   statValue: { fontSize: 22, fontWeight: 700, color: '#333' },
   statLabel: { fontSize: 11, color: '#888', marginTop: 2 }
-}
+  // `satisfies`, not an annotation: `Record<string, CSSProperties>` erases the
+  // literal keys, so a typo like `S.cardTtile` would silently type as
+  // CSSProperties and render an unstyled element instead of failing the build.
+} satisfies Record<string, CSSProperties>
 
 /**
  * Format an UpdateCheckResult from signalk-container's update service
@@ -244,6 +247,42 @@ async function readJson(res: Response): Promise<unknown> {
 /** Narrow an unknown payload to a plain object without asserting its shape. */
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : {}
+}
+
+/**
+ * The tag of an image reference, or null when it carries none.
+ *
+ * Splitting on the *first* colon breaks on a registry that includes a port —
+ * `registry:5000/mayara:latest` would yield `5000/mayara`. The tag is the
+ * segment after the last colon, and only if no `/` follows it (otherwise that
+ * colon belonged to the registry host).
+ */
+function imageTag(image: string): string | null {
+  const colon = image.lastIndexOf(':')
+  if (colon === -1) return null
+  const tag = image.slice(colon + 1)
+  return tag === '' || tag.includes('/') ? null : tag
+}
+
+/**
+ * Decode an UpdateCheckResult. Every field is optional on the wire, so each is
+ * kept only when it has the expected type — otherwise a server sending, say, an
+ * object for `error` would render "Check failed: [object Object]".
+ */
+function toUpdateCheckResult(value: unknown): UpdateCheckResult {
+  const o = asRecord(value)
+  const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
+  return {
+    runningTag: str(o.runningTag),
+    tagKind: str(o.tagKind),
+    currentVersion: str(o.currentVersion) ?? null,
+    latestVersion: str(o.latestVersion) ?? null,
+    updateAvailable: o.updateAvailable === true,
+    reason: str(o.reason),
+    fromCache: o.fromCache === true,
+    lastSuccessfulCheckAt: str(o.lastSuccessfulCheckAt) ?? null,
+    error: str(o.error)
+  }
 }
 
 /**
@@ -419,7 +458,7 @@ export default function PluginConfigurationPanel({
   const [versionSynced, setVersionSynced] = useState(false)
   useEffect(() => {
     if (!versionSynced && pluginStatus?.container?.image) {
-      const tag = pluginStatus.container.image.split(':')[1]
+      const tag = imageTag(pluginStatus.container.image)
       if (tag) {
         setMayaraVersion(tag)
         setVersionSynced(true)
@@ -479,7 +518,7 @@ export default function PluginConfigurationPanel({
       const res = await fetch('/plugins/mayara-server-signalk-plugin/api/update/check')
       // Response shape is signalk-container's UpdateCheckResult.
       // See signalk-container/src/updates/types.ts.
-      const data: UpdateCheckResult = asRecord(await readJson(res))
+      const data = toUpdateCheckResult(await readJson(res))
       if (res.ok) {
         const message = formatUpdateMessage(data)
         if (data.reason === 'offline') {
@@ -536,7 +575,7 @@ export default function PluginConfigurationPanel({
   const radarCount = pluginStatus ? pluginStatus.radars.length : 0
   const containerState = pluginStatus?.container?.state
   const containerImage = pluginStatus?.container?.image || ''
-  const runningTag = containerImage.split(':')[1] || 'unknown'
+  const runningTag = imageTag(containerImage) ?? 'unknown'
   // The rendered option buckets. splitVersions is the shared source of the
   // slice limits, so shownTags/runningTagFallback can never disagree with
   // what these <optgroup>s actually render.
@@ -574,19 +613,29 @@ export default function PluginConfigurationPanel({
             <div style={S.statsGrid}>
               {pluginStatus.radars.map((id) => {
                 const fwd = (pluginStatus.spokeForwarders || []).find((f) => f.radarId === id)
+                const streaming = fwd?.connected === true
+                const stateText = streaming ? 'streaming' : 'connecting'
                 return (
                   <div key={id} style={S.statCard}>
                     <div style={S.statValue}>
+                      {/* The dot alone would convey state by colour only, which
+                          is invisible to a colour-blind user — the label below
+                          repeats it as text, and title/role expose it to AT. */}
                       <div
+                        role="img"
+                        aria-label={stateText}
+                        title={stateText}
                         style={{
                           ...S.stateIndicator,
-                          background: fwd && fwd.connected ? '#10b981' : '#f59e0b',
+                          background: streaming ? '#10b981' : '#f59e0b',
                           display: 'inline-block',
                           marginRight: 6
                         }}
                       />
                     </div>
-                    <div style={S.statLabel}>{id}</div>
+                    <div style={S.statLabel}>
+                      {id} — {stateText}
+                    </div>
                   </div>
                 )
               })}
@@ -675,6 +724,7 @@ export default function PluginConfigurationPanel({
               type="button"
               style={{ ...S.btn, ...S.btnPrimary, padding: '4px 10px', fontSize: 11 }}
               onClick={() => void fetchVersions()}
+              aria-label="Refresh available versions"
               title="Refresh available versions"
             >
               ↻

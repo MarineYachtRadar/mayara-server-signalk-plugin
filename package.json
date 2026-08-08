@@ -47,7 +47,7 @@
     "docs/**/*"
   ],
   "engines": {
-    "node": ">=22",
+    "node": ">=22.15.0",
     "signalk": ">=2.31.0"
   },
   "dependencies": {
