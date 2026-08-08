@@ -1,6 +1,25 @@
 # Radar API divergence: mayara-server vs. signalk-server vs. this plugin
 
-**Date:** 2026-07-19
+> ## ✅ Resolved — historical record
+>
+> **Every divergence described below has been fixed.** The convergence landed as
+> Radar API **v3.4.0**: `@signalk/server-api` 2.31.0 carries the lean `RadarInfo`,
+> signalk-server serves the keyed `{ version, radars }` envelope and the binary
+> spoke stream at `/spokes`, and this plugin returns the lean discovery object,
+> republishes `radars.*` deltas and registers PUT handlers for
+> `radars.<id>.controls.*`.
+>
+> **Do not treat the "todo" markers below as open work** — see the outcome table
+> at the end, which records where each item landed. This file is kept because the
+> reasoning explains _why_ the API has the shape it now does, and because clients
+> written against the pre-3.4.0 shape need to know what changed.
+>
+> The authoritative shape is the `radar` types exported by `@signalk/server-api`
+> and signalk-server's `docs/develop/rest-api/radar_api.md`; prefer those over
+> anything restated here.
+
+**Original note — 2026-07-19**
+
 **Observed against:** mayara-server 3.6.0 (`http://10.56.0.1:6502`), signalk-server
 2.30.0 with this plugin (`http://10.56.0.147:3000`), a Navico HALO24 (dual range
 `nav1034A` / `nav1034B`).
@@ -280,3 +299,31 @@ endpoint.
 Keep clients dialect-tolerant: parse both list shapes, use `spokeDataUrl` when present
 and otherwise construct it from the host per the spec, and verify the spoke WebSocket
 actually opens before relying on it (falling back to a direct mayara-server connection).
+
+## Outcome — what actually shipped
+
+All of it landed as Radar API **v3.4.0**. The "todo" markers in the table above are
+historical; this is the real status.
+
+| #    | Change                                                                | Landed in                                                  |
+| ---- | --------------------------------------------------------------------- | ---------------------------------------------------------- |
+| 1    | Lean `RadarInfo` + `RadarsResponse { version, radars }` in server-api | `@signalk/server-api` 2.31.0 (SignalK/signalk-server#2859) |
+| 2, 3 | `getRadars()` serves the keyed envelope; OpenAPI realigned            | signalk-server (same PR)                                   |
+| 4a   | Binary spokes moved from `/stream` to `/spokes`                       | signalk-server (same PR)                                   |
+| 4b   | Forwarder republishes `radars.*`, not just `notifications.*`          | this plugin, PR #90                                        |
+| 4c   | `registerPutHandler` for `radars.<id>.controls.*` → mayara            | this plugin, PR #90                                        |
+| 5    | `getRadarInfo` returns the lean discovery object                      | this plugin, PR #90                                        |
+
+### What this means for clients
+
+The dialect-tolerance advice above is no longer needed against a converged
+server, though it remains harmless. In short: discovery is a keyed envelope
+carrying an API version to negotiate on; `RadarInfo` identifies a radar and
+nothing more, with live state and static parameters behind their own endpoints;
+and neither stream URL is published, because both are reached by convention from
+the host that served the response — so a client constructs the same URLs whether
+it talks to mayara-server directly or through Signal K. Control writes are Signal
+K PUTs, which the plugin relays to mayara.
+
+For exact field names and types, read the `radar` types in `@signalk/server-api`
+and `radar_api.md` in the signalk-server repo rather than this note.
