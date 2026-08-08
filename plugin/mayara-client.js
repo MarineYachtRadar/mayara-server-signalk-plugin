@@ -1,13 +1,7 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.MayaraClient = void 0;
-const http_1 = __importDefault(require("http"));
-const https_1 = __importDefault(require("https"));
+import http from 'http';
+import https from 'https';
 const API_BASE = '/signalk/v2/api/vessels/self/radars';
-class MayaraClient {
+export class MayaraClient {
     host;
     port;
     secure;
@@ -33,7 +27,7 @@ class MayaraClient {
                 },
                 timeout: this.timeout
             };
-            const transport = this.secure ? https_1.default : http_1.default;
+            const transport = this.secure ? https : http;
             const req = transport.request(options, (res) => {
                 let data = '';
                 res.on('data', (chunk) => (data += chunk));
@@ -122,5 +116,4 @@ class MayaraClient {
         // No persistent connections to close for HTTP client
     }
 }
-exports.MayaraClient = MayaraClient;
 //# sourceMappingURL=mayara-client.js.map

@@ -1,6 +1,6 @@
 import { radar } from '@signalk/server-api'
-import { MayaraClient } from './mayara-client'
-import { MayaraServerAPI } from './types'
+import { MayaraClient } from './mayara-client.js'
+import { MayaraServerAPI } from './types.js'
 
 export function createRadarProvider(
   client: MayaraClient,

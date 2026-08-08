@@ -4,13 +4,15 @@
  *
  * Creates public/ with a redirect page to mayara-server's GUI.
  * The actual radar GUI runs on mayara-server itself.
- * Webpack adds remoteEntry.js for the config panel.
+ * Vite adds remoteEntry.js for the config panel.
  */
 
-const fs = require('fs')
-const path = require('path')
+import fs from 'node:fs'
+import path from 'node:path'
 
-const publicDest = path.join(__dirname, 'public')
+const projectRoot = import.meta.dirname
+
+const publicDest = path.join(projectRoot, 'public')
 
 function main() {
   console.log('=== MaYaRa SignalK Plugin Build ===\n')
@@ -24,7 +26,7 @@ function main() {
   // Copy logo for webapp icon. SignalK resolves signalk.appIcon relative to
   // public/, so the file must live at public/assets/mayara_logo.png in the
   // published package.
-  const logoSrc = path.resolve(__dirname, 'assets', 'mayara_logo.png')
+  const logoSrc = path.resolve(projectRoot, 'assets', 'mayara_logo.png')
   const logoDest = path.join(publicDest, 'assets', 'mayara_logo.png')
   if (!fs.existsSync(logoSrc)) {
     throw new Error(`Logo source missing: ${logoSrc}`)

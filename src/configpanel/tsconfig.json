@@ -1,0 +1,36 @@
+{
+  // The config panel is a browser bundle, not part of the Node plugin
+  // compile. It needs DOM types and JSX, which must never leak into the
+  // root tsconfig — server code that referenced `document` would typecheck
+  // clean. tsc only typechecks here (noEmit); Vite does the compiling.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+
+    // "react" (classic) is load-bearing and must match the `jsxRuntime:
+    // "classic"` option in vite.config.ts — see the long comment there.
+    // Under "react-jsx" tsc stops requiring `React` to be in scope, the
+    // import gets dropped as unused, and the classic transform then emits
+    // React.createElement against an undefined React: a runtime crash with
+    // no build error.
+    "jsx": "react",
+
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+
+    // Vite compiles one file at a time with no cross-file type information,
+    // so the code must be safe to transpile in isolation.
+    "isolatedModules": true,
+
+    // The panel is still plain JS/JSX; allow it in so `typecheck:panel` at
+    // least parses and resolves it. Converting it to .tsx is a follow-up.
+    "allowJs": true
+  },
+  "include": ["."]
+}

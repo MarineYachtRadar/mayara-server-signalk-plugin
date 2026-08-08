@@ -74,7 +74,8 @@ When mayara grows the status model, this plugin must **forward the new fields ve
 
 - `npm run format` — prettier + eslint --fix
 - `npm run lint` — eslint check (no fixes)
-- `npm run build` — tsc → `plugin/`, then webpack the React config panel
+- `npm run build` — tsc → `plugin/`, typecheck the panel, then Vite-build the React config panel
+- `npm run typecheck:panel` — typecheck the browser-side config panel (`src/configpanel/tsconfig.json`)
 - `npm run test` — vitest
 - `npm run build:all` — lint + build + test (run this before every commit)
 
@@ -170,6 +171,39 @@ Without this, signalk-container defaults `inImageUid` to 0. On rootless podman t
 The token is delivered via the `MAYARA_SIGNALK_TOKEN` env var, not as a bind-mounted file, precisely so the in-container UID can differ from the host SK UID without breaking the upstream Signal K channel. See "Signal K device-token flow" above.
 
 Test guard: "declares the mayara image in-image UID/GID for correct uid mapping" in `test/container-integration.test.ts`. Don't remove the `user` field from `buildContainerConfig`; doing so silently regresses to whichever UID story the user's runtime defaults to.
+
+### ESM plugin + Vite Module Federation
+
+The package is `"type": "module"` and the emitted `plugin/` is real ESM. Signal K
+loads it through `importOrRequire` (`src/modules.ts`), which tries `require()`
+first — Node ≥20.19/22 loads ESM through `require` — and falls back to `import()`.
+Both paths are exercised; the entry is `export default function (app)`.
+
+Three things are load-bearing and easy to break:
+
+- **`.js` extensions on relative imports.** `moduleResolution: "nodenext"` makes
+  tsc enforce Node's real ESM rules, so `./mayara-client` must be written
+  `./mayara-client.js`. Under `"bundler"` resolution tsc would accept the bare
+  specifier and emit it verbatim, which Node then rejects at load with
+  `ERR_MODULE_NOT_FOUND`. The `vi.mock()` paths in `test/` must use the same
+  specifier as the code under test, or the mock silently doesn't apply.
+- **`jsxRuntime: "classic"` in `vite.config.ts` must match `"jsx": "react"` in
+  `src/configpanel/tsconfig.json`.** The automatic runtime imports
+  `react/jsx-runtime`, which is not in the federation `shared` scope, so the
+  remote would ship its own React JSX runtime — a second React instance whose
+  dispatcher is not the host's. `useState` then reads null inside the host's
+  render tree and the panel fails to mount **at runtime, with no build error**.
+  Under `"react-jsx"` tsc stops requiring `React` in scope, the import is dropped
+  as unused, and the classic transform emits `React.createElement` against an
+  undefined `React` — same class of silent failure.
+- **The panel has its own tsconfig.** It is a browser bundle needing DOM libs and
+  JSX; those must never leak into the Node compile, or server code referencing
+  `document` would typecheck clean. Vite does not typecheck, so
+  `npm run typecheck:panel` is a separate step wired into `build`.
+
+`publicDir: false` matters too: `public/` is this plugin's _output_ directory
+(Signal K serves it), not a Vite static-asset source — the default would make
+Vite try to copy `public/` into itself and race the `build.js` artifacts.
 
 ### Build artifacts in `plugin/`
 

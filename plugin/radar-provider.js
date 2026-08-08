@@ -1,7 +1,4 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.createRadarProvider = createRadarProvider;
-function createRadarProvider(client, app) {
+export function createRadarProvider(client, app) {
     const debug = app.debug.bind(app);
     return {
         async getRadars() {

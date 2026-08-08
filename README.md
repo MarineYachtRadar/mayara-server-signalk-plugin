@@ -157,7 +157,7 @@ npm run build
 
 - `npm run format` — prettier + eslint --fix
 - `npm run lint` — eslint check
-- `npm run build` — compile TypeScript + webpack config panel
+- `npm run build` — compile TypeScript + Vite-build the config panel
 - `npm run test` — run tests (vitest)
 - `npm run build:all` — lint + build + test
 

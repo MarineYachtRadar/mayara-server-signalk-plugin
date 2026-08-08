@@ -4,7 +4,7 @@ import {
   shownTags,
   runningTagFallback,
   splitVersions
-} from '../src/configpanel/versionsView'
+} from '../src/configpanel/versionsView.js'
 
 describe('versionsView: deriveVersionsView', () => {
   it('full success: returns the versions and no error line', () => {

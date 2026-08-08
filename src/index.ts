@@ -8,18 +8,18 @@ import {
   responseInterceptor,
   type RequestHandler
 } from 'http-proxy-middleware'
-import { MayaraClient } from './mayara-client'
-import { rewriteGuiProxyPath } from './gui-proxy-path'
-import { createRadarProvider } from './radar-provider'
-import { SpokeForwarder } from './spoke-forwarder'
-import { NotificationForwarder } from './notification-forwarder'
+import { MayaraClient } from './mayara-client.js'
+import { rewriteGuiProxyPath } from './gui-proxy-path.js'
+import { createRadarProvider } from './radar-provider.js'
+import { SpokeForwarder } from './spoke-forwarder.js'
+import { NotificationForwarder } from './notification-forwarder.js'
 import {
   ContainerConfig,
   ContainerManagerApi,
   ContainerResourceLimits,
   MayaraServerAPI
-} from './types'
-import { ConfigSchema, Config, SCHEMA_DEFAULTS } from './config/schema'
+} from './types.js'
+import { ConfigSchema, Config, SCHEMA_DEFAULTS } from './config/schema.js'
 import {
   awaitApproval,
   beginTokenRequest,
@@ -28,7 +28,7 @@ import {
   readGithubToken,
   validateCachedToken,
   writeCachedToken
-} from './signalk-token'
+} from './signalk-token.js'
 
 const MAYARA_IMAGE = 'ghcr.io/marineyachtradar/mayara-server'
 const CONTAINER_NAME = 'mayara-server'
@@ -66,7 +66,7 @@ function getContainerManager(): ContainerManagerApi | undefined {
   return globalThis.__signalk_containerManager
 }
 
-module.exports = function (app: MayaraServerAPI): Plugin {
+export default function (app: MayaraServerAPI): Plugin {
   let client: MayaraClient | null = null
   let currentSettings: Partial<Config> | null = null
   const spokeForwarders = new Map<string, SpokeForwarder>()

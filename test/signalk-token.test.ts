@@ -20,7 +20,7 @@ import {
   readGithubToken,
   validateCachedToken,
   writeCachedToken
-} from '../src/signalk-token'
+} from '../src/signalk-token.js'
 
 let dataDir: string
 let originalFetch: typeof globalThis.fetch

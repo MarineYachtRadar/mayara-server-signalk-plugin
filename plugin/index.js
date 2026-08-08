@@ -1,14 +1,12 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-const net_1 = require("net");
-const http_proxy_middleware_1 = require("http-proxy-middleware");
-const mayara_client_1 = require("./mayara-client");
-const gui_proxy_path_1 = require("./gui-proxy-path");
-const radar_provider_1 = require("./radar-provider");
-const spoke_forwarder_1 = require("./spoke-forwarder");
-const notification_forwarder_1 = require("./notification-forwarder");
-const schema_1 = require("./config/schema");
-const signalk_token_1 = require("./signalk-token");
+import { Server as NetServer } from 'net';
+import { createProxyMiddleware, fixRequestBody, responseInterceptor } from 'http-proxy-middleware';
+import { MayaraClient } from './mayara-client.js';
+import { rewriteGuiProxyPath } from './gui-proxy-path.js';
+import { createRadarProvider } from './radar-provider.js';
+import { SpokeForwarder } from './spoke-forwarder.js';
+import { NotificationForwarder } from './notification-forwarder.js';
+import { ConfigSchema, SCHEMA_DEFAULTS } from './config/schema.js';
+import { awaitApproval, beginTokenRequest, deleteCachedToken, readCachedToken, readGithubToken, validateCachedToken, writeCachedToken } from './signalk-token.js';
 const MAYARA_IMAGE = 'ghcr.io/marineyachtradar/mayara-server';
 const CONTAINER_NAME = 'mayara-server';
 const PLUGIN_ID = 'mayara-server-signalk-plugin';
@@ -42,7 +40,7 @@ const DEFAULT_RESOURCES = {
 function getContainerManager() {
     return globalThis.__signalk_containerManager;
 }
-module.exports = function (app) {
+export default function (app) {
     let client = null;
     let currentSettings = null;
     const spokeForwarders = new Map();
@@ -76,14 +74,14 @@ module.exports = function (app) {
         id: PLUGIN_ID,
         name: 'MaYaRa Radar (Server)',
         description: 'Connect SignalK to mayara-server for multi-brand marine radar integration',
-        schema: schema_1.ConfigSchema,
+        schema: ConfigSchema,
         start(config) {
             app.debug('Starting mayara-server-signalk-plugin');
             // Signal K does not seed schema defaults into the runtime config —
             // when the plugin is auto-enabled (or enabled without saving the
             // form), `config` is `{}`. Merge defaults so callers can rely on
             // every field being present.
-            const merged = { ...schema_1.SCHEMA_DEFAULTS, ...config };
+            const merged = { ...SCHEMA_DEFAULTS, ...config };
             currentSettings = merged;
             // New generation: supersedes any token loop left over from a prior
             // start (a fast disable/enable or config save) so only the loop this
@@ -188,7 +186,7 @@ module.exports = function (app) {
                 const proto = currentSettings?.secure ? 'https' : 'http';
                 return `${proto}://${host}:${port}`;
             };
-            const guiProxy = (0, http_proxy_middleware_1.createProxyMiddleware)({
+            const guiProxy = createProxyMiddleware({
                 router: (req) => {
                     // Radar data — the radar REST API, the control stream, and the spoke
                     // stream — is all served under `/signalk/...` by the Signal K server
@@ -229,7 +227,7 @@ module.exports = function (app) {
                 ws: false,
                 xfwd: true,
                 followRedirects: false,
-                pathRewrite: gui_proxy_path_1.rewriteGuiProxyPath,
+                pathRewrite: rewriteGuiProxyPath,
                 selfHandleResponse: true,
                 on: {
                     // Signal K mounts `express.json()` before the plugin router
@@ -246,9 +244,9 @@ module.exports = function (app) {
                     // re-serializes `req.body` (when present) and writes it to
                     // the upstream ClientRequest with a corrected Content-Length.
                     // For GET / HEAD it's a no-op (req.body is undefined).
-                    proxyReq: http_proxy_middleware_1.fixRequestBody,
+                    proxyReq: fixRequestBody,
                     // eslint-disable-next-line @typescript-eslint/no-misused-promises -- responseInterceptor returns a function whose Promise return value is awaited by node-http-proxy internally.
-                    proxyRes: (0, http_proxy_middleware_1.responseInterceptor)((buffer, proxyRes, req) => {
+                    proxyRes: responseInterceptor((buffer, proxyRes, req) => {
                         const ct = proxyRes.headers['content-type'] ?? '';
                         // Only the radar-list JSON contains stream URLs we need
                         // to rewrite. Everything else (HTML, JS, CSS, binary
@@ -306,7 +304,7 @@ module.exports = function (app) {
                     // SK-internal and flagged by the upstream plugin-CI lint, so this
                     // back-reference is the only documented public path to the server.
                     const wsServer = req.socket.server;
-                    if (wsServer instanceof net_1.Server) {
+                    if (wsServer instanceof NetServer) {
                         const prefix = `${GUI_PROXY_PATH}/`;
                         upgradeListener = (upReq, socket, head) => {
                             if (upReq.url && upReq.url.startsWith(prefix)) {
@@ -478,7 +476,7 @@ module.exports = function (app) {
                 // A token lifts the cap to 5000/hr. Optional — absent, the calls
                 // stay unauthenticated (no regression). Both fetches share this
                 // one object, so a single conditional authenticates both.
-                const ghToken = (0, signalk_token_1.readGithubToken)(app.getDataDirPath());
+                const ghToken = readGithubToken(app.getDataDirPath());
                 const repo = 'MarineYachtRadar/mayara-server';
                 // Fetch a GitHub path, authenticated when a token is available. A
                 // token lifts the rate limit from 60 to 5000 req/hr per IP, curing
@@ -649,7 +647,7 @@ module.exports = function (app) {
         const sk = resolveSignalkLoopback();
         const tcpPort = Number(process.env.TCPSTREAMPORT) || 8375;
         const dataDir = app.getDataDirPath();
-        const cachedToken = userOverridesNav ? undefined : (0, signalk_token_1.readCachedToken)(dataDir);
+        const cachedToken = userOverridesNav ? undefined : readCachedToken(dataDir);
         const injected = [];
         const env = {};
         if (!userOverridesNav) {
@@ -720,14 +718,14 @@ module.exports = function (app) {
         // over https — its plain-HTTP listener 302-redirects and drops the
         // POST body, so http would never mint a token.
         const sk = resolveSignalkApi();
-        const cached = (0, signalk_token_1.readCachedToken)(dataDir);
+        const cached = readCachedToken(dataDir);
         if (cached) {
             // A token on disk isn't necessarily still valid — the admin may have
             // revoked it in Security → Access Requests. Validate before trusting
             // it; if revoked, drop the cache and fall through to re-request so the
             // recovery loop can pick up a fresh approval without a manual restart.
             // `unknown` (SK still starting, network blip) keeps the cached token.
-            const state = await (0, signalk_token_1.validateCachedToken)({
+            const state = await validateCachedToken({
                 token: cached,
                 signalkPort: sk.port,
                 ssl: sk.scheme === 'https'
@@ -737,7 +735,7 @@ module.exports = function (app) {
                 return 'done';
             }
             app.debug('Cached Signal K token was revoked; dropping it and re-requesting');
-            (0, signalk_token_1.deleteCachedToken)(dataDir);
+            deleteCachedToken(dataDir);
             // The container is still running with the dead token in env; recreate
             // it so it drops to tcp: until a new token is approved.
             await containers.ensureRunning(CONTAINER_NAME, buildContainerConfig(tag));
@@ -750,7 +748,7 @@ module.exports = function (app) {
         // post-approval — we'd have to revoke and re-request. Asking for
         // the broader scope up front avoids that migration step when the
         // writeback features land in mayara-server.
-        const begin = await (0, signalk_token_1.beginTokenRequest)({
+        const begin = await beginTokenRequest({
             dataDir,
             signalkPort: sk.port,
             ssl: sk.scheme === 'https',
@@ -794,7 +792,7 @@ module.exports = function (app) {
         app.setPluginStatus('Awaiting Signal K token approval — see Security → Access Requests');
         app.debug(`Awaiting approval at ${begin.href} (request ${begin.requestId}). ` +
             `Set plugin config "requestSignalkToken" to false to suppress this.`);
-        const token = await (0, signalk_token_1.awaitApproval)(begin.href, sk.port, isCancelled, (msg) => {
+        const token = await awaitApproval(begin.href, sk.port, isCancelled, (msg) => {
             app.debug(msg);
         }, undefined, // keep the default poll interval
         sk.scheme === 'https');
@@ -809,7 +807,7 @@ module.exports = function (app) {
                 'fill from live deltas only; will re-request periodically.');
             return 'retry';
         }
-        (0, signalk_token_1.writeCachedToken)(dataDir, token);
+        writeCachedToken(dataDir, token);
         app.debug('Signal K token approved and cached; recreating container with WS transport');
         app.setPluginStatus('Signal K token approved — recreating container...');
         try {
@@ -928,7 +926,7 @@ module.exports = function (app) {
                 // the unauthenticated 60/hr limit (or GitHub's stickier 429
                 // secondary limit on a shared WAN IP) makes "Check" fail.
                 versionSource: containers.updates.sources.githubReleases('MarineYachtRadar/mayara-server', {
-                    token: (0, signalk_token_1.readGithubToken)(app.getDataDirPath())
+                    token: readGithubToken(app.getDataDirPath())
                 })
             });
             app.debug('Registered with signalk-container update service');
@@ -946,13 +944,13 @@ module.exports = function (app) {
         if (settings.managedContainer) {
             await startManagedContainer(settings);
         }
-        client = new mayara_client_1.MayaraClient({
+        client = new MayaraClient({
             host: settings.host ?? 'localhost',
             port: settings.port ?? 6502,
             secure: settings.secure ?? false,
             debug: app.debug.bind(app)
         });
-        const provider = (0, radar_provider_1.createRadarProvider)(client, app);
+        const provider = createRadarProvider(client, app);
         try {
             app.radarApi.register(PLUGIN_ID, {
                 name: plugin.name,
@@ -982,7 +980,7 @@ module.exports = function (app) {
         // K server. The forwarder owns its own reconnect loop, so failing
         // here just means it'll reach mayara on a later attempt.
         if (!notificationForwarder) {
-            notificationForwarder = new notification_forwarder_1.NotificationForwarder(app, {
+            notificationForwarder = new NotificationForwarder(app, {
                 pluginId: PLUGIN_ID,
                 url: client.getStateStreamUrl(),
                 // Relay both guard-zone notifications and radar control/target state
@@ -1096,7 +1094,7 @@ module.exports = function (app) {
                 app.debug(`New radar discovered: ${radarId}`);
                 knownRadars.add(radarId);
                 if (app.binaryStreamManager) {
-                    const forwarder = new spoke_forwarder_1.SpokeForwarder({
+                    const forwarder = new SpokeForwarder({
                         radarId,
                         url: client.getSpokeStreamUrl(radarId),
                         binaryStreamManager: app.binaryStreamManager,
@@ -1188,7 +1186,7 @@ module.exports = function (app) {
         }
     }
     return plugin;
-};
+}
 function errMsg(err) {
     return err instanceof Error ? err.message : String(err);
 }

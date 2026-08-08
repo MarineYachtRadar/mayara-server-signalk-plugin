@@ -1,11 +1,5 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.SpokeForwarder = void 0;
-const ws_1 = __importDefault(require("ws"));
-class SpokeForwarder {
+import WebSocket from 'ws';
+export class SpokeForwarder {
     radarId;
     url;
     binaryStreamManager;
@@ -34,7 +28,7 @@ class SpokeForwarder {
             return;
         this.debug(`Connecting to spoke stream: ${this.url}`);
         try {
-            this.ws = new ws_1.default(this.url);
+            this.ws = new WebSocket(this.url);
             this.ws.on('open', () => {
                 this.connected = true;
                 this.debug(`Connected to spoke stream for ${this.radarId}`);
@@ -107,5 +101,4 @@ class SpokeForwarder {
         this.debug(`Stopped spoke forwarder for ${this.radarId}`);
     }
 }
-exports.SpokeForwarder = SpokeForwarder;
 //# sourceMappingURL=spoke-forwarder.js.map
