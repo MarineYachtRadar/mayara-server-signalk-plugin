@@ -200,6 +200,14 @@ Three things are load-bearing and easy to break:
   JSX; those must never leak into the Node compile, or server code referencing
   `document` would typecheck clean. Vite does not typecheck, so
   `npm run typecheck:panel` is a separate step wired into `build`.
+  `eslint.config.mjs` points the type-aware parser at that project for
+  `src/configpanel/**`, so the panel is linted under the same
+  `strictTypeChecked` rules as the rest of `src/` — it is no longer exempt.
+
+The panel is 100% TypeScript (`.tsx`/`.ts`); there is no hand-written `.d.ts`
+shim any more. `Response.json()` is typed `any`, which spreads silently through
+everything derived from it — the panel funnels reads through a local `readJson()`
+returning `unknown` so each call site has to narrow. Keep new fetches on it.
 
 `publicDir: false` matters too: `public/` is this plugin's _output_ directory
 (Signal K serves it), not a Vite static-asset source — the default would make
