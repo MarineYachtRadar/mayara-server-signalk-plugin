@@ -8,6 +8,11 @@ import {
   responseInterceptor,
   type RequestHandler
 } from 'http-proxy-middleware'
+import {
+  getContainerManager as helperGetContainerManager,
+  waitForContainerManager,
+  isValidImageTag
+} from 'signalk-container-helper'
 import { MayaraClient } from './mayara-client.js'
 import { rewriteGuiProxyPath } from './gui-proxy-path.js'
 import { createRadarProvider } from './radar-provider.js'
@@ -33,7 +38,6 @@ import {
 const MAYARA_IMAGE = 'ghcr.io/marineyachtradar/mayara-server'
 const CONTAINER_NAME = 'mayara-server'
 const PLUGIN_ID = 'mayara-server-signalk-plugin'
-const SAFE_TAG = /^[a-zA-Z0-9._-]+$/
 // Same-origin path the SK server forwards to mayara-server's :6502.
 // Keeps the browser on the SK port (3000 / 443), so HTTPS works and
 // only one firewall port needs to be open.
@@ -66,9 +70,13 @@ const DEFAULT_RESOURCES: ContainerResourceLimits = {
  * Typed accessor for the cross-plugin container manager API. Returns
  * undefined if signalk-container has not finished start() yet, or if
  * the user has it disabled. Callers should always handle undefined.
+ *
+ * Delegates to signalk-container-helper so the "where does the manager live"
+ * knowledge sits in one shared place; the local cast keeps our own typed
+ * `ContainerManagerApi` mirror (src/types.ts) as the contract callers see.
  */
 function getContainerManager(): ContainerManagerApi | undefined {
-  return globalThis.__signalk_containerManager
+  return helperGetContainerManager()
 }
 
 export default function (app: MayaraServerAPI): Plugin {
@@ -457,7 +465,7 @@ export default function (app: MayaraServerAPI): Plugin {
           (typeof body.tag === 'string' ? body.tag : undefined) ??
           currentSettings?.mayaraVersion ??
           'latest'
-        if (!SAFE_TAG.test(tag)) {
+        if (!isValidImageTag(tag)) {
           res.status(400).json({ error: 'Invalid tag format' })
           return
         }
@@ -576,7 +584,7 @@ export default function (app: MayaraServerAPI): Plugin {
           }[]
           releases.push(
             ...data
-              .filter((r) => !r.draft && SAFE_TAG.test(r.tag_name))
+              .filter((r) => !r.draft && isValidImageTag(r.tag_name))
               .map((r) => ({ tag: r.tag_name, prerelease: r.prerelease }))
           )
         }
@@ -592,7 +600,7 @@ export default function (app: MayaraServerAPI): Plugin {
             ...pulls
               .filter((p) => p.labels.some((l) => l.name === 'build-image'))
               .map((p) => ({ tag: `pr${p.number}`, pr: p.number, title: p.title }))
-              .filter((p) => SAFE_TAG.test(p.tag))
+              .filter((p) => isValidImageTag(p.tag))
           )
         }
 
@@ -1009,47 +1017,32 @@ export default function (app: MayaraServerAPI): Plugin {
     )
   }
 
-  /**
-   * Wait up to `timeoutMs` for signalk-container to be both loaded
-   * (cross-plugin global populated) and finished with runtime detection.
-   * Returns the container manager handle, or undefined if either phase
-   * timed out or detection failed. Caller sets a plugin error on
-   * undefined.
-   */
-  async function waitForContainerManager(
-    timeoutMs = 30000
-  ): Promise<ContainerManagerApi | undefined> {
-    const deadline = Date.now() + timeoutMs
-
-    // Phase 1: poll for the cross-plugin global. signalk-container's
-    // start() may not have run yet on a fresh SK boot.
-    let containers = getContainerManager()
-    while (!containers && Date.now() < deadline) {
-      app.setPluginStatus('Waiting for signalk-container plugin to load...')
-      await new Promise<void>((resolve) => setTimeout(resolve, 500))
-      containers = getContainerManager()
-    }
-    if (!containers) return undefined
-
-    // Phase 2: await whenReady() with a remaining-time cap. whenReady()
-    // resolves on success OR failure of runtime detection, so re-check
-    // getRuntime() afterwards.
-    app.setPluginStatus('Waiting for container runtime detection...')
-    const remaining = Math.max(0, deadline - Date.now())
-    await Promise.race([
-      containers.whenReady(),
-      new Promise<void>((resolve) => setTimeout(resolve, remaining))
-    ])
-    return containers.getRuntime() ? containers : undefined
-  }
-
   async function startManagedContainer(settings: Partial<Config>): Promise<void> {
-    const containers = await waitForContainerManager()
+    // Two-phase wait (global appears → runtime detection settles), from
+    // signalk-container-helper. Unlike the hand-rolled version this replaced,
+    // it distinguishes "signalk-container absent" from "present but no usable
+    // podman/docker", which are different operator problems.
+    const { manager: containers, runtime } = await waitForContainerManager({
+      timeoutMs: 30000,
+      onWaiting: (phase) => {
+        app.setPluginStatus(
+          phase === 'manager'
+            ? 'Waiting for signalk-container plugin to load...'
+            : 'Waiting for container runtime detection...'
+        )
+      }
+    })
     if (!containers) {
       app.setPluginError(
         'signalk-container plugin required for managed mode. Install it or set managedContainer=false.'
       )
       throw new Error('Container manager not available')
+    }
+    if (!runtime) {
+      app.setPluginError(
+        'signalk-container found no usable container runtime (podman/docker). Check its status.'
+      )
+      throw new Error('No container runtime detected')
     }
 
     app.debug('Container runtime ready, starting mayara-server')
