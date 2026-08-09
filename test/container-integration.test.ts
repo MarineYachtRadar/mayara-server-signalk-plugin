@@ -1463,6 +1463,117 @@ describe('mayara-server-signalk-plugin container integration', () => {
     })
   })
 
+  describe('GET /api/gui-url', () => {
+    it('returns mayara’s own host:port by default', async () => {
+      const { router, plugin } = await loadPlugin({ port: 6502 })
+      const res = makeRes()
+      await getHandler(router, 'GET /api/gui-url')({ hostname: 'boat.local' }, res)
+      expect(res.body).toEqual({ url: 'http://boat.local:6502/gui/' })
+      await plugin.stop()
+    })
+
+    it('returns the proxy path when directGuiUrl is disabled', async () => {
+      const { router, plugin } = await loadPlugin({ directGuiUrl: false })
+      const res = makeRes()
+      await getHandler(router, 'GET /api/gui-url')({ hostname: 'boat.local' }, res)
+      expect(res.body).toEqual({ url: '/plugins/mayara-server-signalk-plugin/gui/' })
+      await plugin.stop()
+    })
+
+    it('applies the direct default to configs saved before the setting existed', async () => {
+      // `start()` merges SCHEMA_DEFAULTS under the stored config, so an
+      // upgrade from a version without this field adopts the new default and
+      // switches to the direct URL. Documented here because it changes
+      // behaviour for existing installs on upgrade rather than only for new
+      // ones — operators who need the proxy must opt back in.
+      const { router, plugin } = await loadPlugin({ host: 'localhost', port: 6502 })
+      const res = makeRes()
+      await getHandler(router, 'GET /api/gui-url')({ hostname: 'boat.local' }, res)
+      expect(res.body).toEqual({ url: 'http://boat.local:6502/gui/' })
+      await plugin.stop()
+    })
+
+    it('uses the request hostname, not the configured host', async () => {
+      // In container mode `host` is `localhost`, which names the machine
+      // running the browser rather than the one running mayara. Building the
+      // direct URL from it would send every remote browser to itself, so the
+      // hostname the browser already reached Signal K on is used instead.
+      const { router, plugin } = await loadPlugin({
+        directGuiUrl: true,
+        host: 'localhost',
+        port: 6502
+      })
+      const res = makeRes()
+      await getHandler(router, 'GET /api/gui-url')({ hostname: '192.168.0.122' }, res)
+      expect(res.body).toEqual({ url: 'http://192.168.0.122:6502/gui/' })
+      await plugin.stop()
+    })
+
+    it('uses the configured host in external mode', async () => {
+      // External mode is precisely the case where mayara runs on another
+      // machine, so the request hostname (the Signal K server) is the wrong
+      // target — the configured host is the only thing that names mayara.
+      const { router, plugin } = await loadPlugin({
+        directGuiUrl: true,
+        managedContainer: false,
+        host: 'radar-box.local',
+        port: 6502
+      })
+      const res = makeRes()
+      await getHandler(router, 'GET /api/gui-url')({ hostname: '192.168.0.122' }, res)
+      expect(res.body).toEqual({ url: 'http://radar-box.local:6502/gui/' })
+      await plugin.stop()
+    })
+
+    it('brackets an IPv6 request hostname', async () => {
+      // Express strips the brackets from IPv6 hosts, and without them the
+      // result is not a parseable URL — the radar link would simply be broken
+      // on an IPv6-only network.
+      const { router, plugin } = await loadPlugin({ port: 6502 })
+      const res = makeRes()
+      await getHandler(router, 'GET /api/gui-url')({ hostname: 'fd00::1' }, res)
+      expect(res.body).toEqual({ url: 'http://[fd00::1]:6502/gui/' })
+      expect(() => new URL((res.body as { url: string }).url)).not.toThrow()
+      await plugin.stop()
+    })
+
+    it('brackets an IPv6 configured host, and leaves an already-bracketed one alone', async () => {
+      const { router, plugin } = await loadPlugin({
+        managedContainer: false,
+        host: 'fd00::2',
+        port: 6502
+      })
+      const res = makeRes()
+      await getHandler(router, 'GET /api/gui-url')({ hostname: 'boat.local' }, res)
+      expect(res.body).toEqual({ url: 'http://[fd00::2]:6502/gui/' })
+      // loadPlugin() calls vi.resetModules(), so the first instance is torn
+      // down before the second starts rather than leaving two live.
+      await plugin.stop()
+
+      const { router: r2, plugin: p2 } = await loadPlugin({
+        managedContainer: false,
+        host: '[fd00::3]',
+        port: 6502
+      })
+      const res2 = makeRes()
+      await getHandler(r2, 'GET /api/gui-url')({ hostname: 'boat.local' }, res2)
+      expect(res2.body).toEqual({ url: 'http://[fd00::3]:6502/gui/' })
+      await p2.stop()
+    })
+
+    it('uses https when secure is set', async () => {
+      const { router, plugin } = await loadPlugin({
+        directGuiUrl: true,
+        secure: true,
+        port: 6502
+      })
+      const res = makeRes()
+      await getHandler(router, 'GET /api/gui-url')({ hostname: 'boat.local' }, res)
+      expect(res.body).toEqual({ url: 'https://boat.local:6502/gui/' })
+      await plugin.stop()
+    })
+  })
+
   describe('plugin.stop() lifecycle', () => {
     it('unregisters from update service and stops the container', async () => {
       const { plugin, containers } = await loadPlugin()

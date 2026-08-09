@@ -44,6 +44,20 @@ export const ConfigSchema = Type.Object({
     title: 'Use HTTPS/WSS'
   }),
 
+  directGuiUrl: Type.Boolean({
+    default: true,
+    title: 'Open the radar GUI directly on mayara-server',
+    description:
+      "The browser is sent straight to mayara-server's own port. The AIS " +
+      'overlay is unaffected — mayara relays vessels from Signal K into its ' +
+      "own store — but mayara's port must be reachable from the browser and " +
+      'the transport follows the HTTPS/WSS setting below — with it off the ' +
+      'radar session is unencrypted even when Signal K itself uses HTTPS. ' +
+      'Disable this to reach the GUI through this plugin instead, which keeps ' +
+      "the browser on the Signal K port and inherits Signal K's TLS: needed " +
+      'when only that port is open, or when the radar session must be encrypted.'
+  }),
+
   discoveryPollInterval: Type.Number({
     default: 10,
     title: 'Discovery poll interval (seconds)',
@@ -75,6 +89,7 @@ export const SCHEMA_DEFAULTS: Config = {
   host: 'localhost',
   port: 6502,
   secure: false,
+  directGuiUrl: true,
   discoveryPollInterval: 10,
   reconnectInterval: 5
 }
