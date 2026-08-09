@@ -7,6 +7,7 @@ export declare const ConfigSchema: Type.TObject<{
     host: Type.TString;
     port: Type.TNumber;
     secure: Type.TBoolean;
+    directGuiUrl: Type.TBoolean;
     discoveryPollInterval: Type.TNumber;
     reconnectInterval: Type.TNumber;
 }>;

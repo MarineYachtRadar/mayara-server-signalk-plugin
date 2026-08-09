@@ -140,6 +140,21 @@ port needs to be reachable — mayara-server's own port (6502) does not have to
 be exposed. The proxy forwards the GUI's REST calls and its radar/state/spoke
 WebSocket streams to mayara-server, over both HTTP and HTTPS.
 
+Enabling **Open the radar GUI directly on mayara-server** sends the browser to
+mayara-server's own port instead, bypassing the proxy. The AIS overlay still
+works — mayara-server relays vessels from Signal K into its own store — but
+mayara-server's port must then be reachable from the browser. The transport
+follows the **Use HTTPS/WSS** setting: with it off the GUI is served over plain
+HTTP and cannot be opened from an HTTPS Signal K page without a mixed-content
+warning.
+
+The host is resolved to match where mayara-server runs. When the plugin manages
+the container, mayara-server is on the same machine as Signal K, so the address
+the browser already used to reach Signal K is reused and the link works from
+anywhere on the network. In external mode the configured **mayara-server host**
+is used, since it names a different machine. The port always comes from the
+plugin configuration.
+
 ## Features
 
 - **Container management**: Pull, update, and run mayara-server via signalk-container with sensible default resource limits

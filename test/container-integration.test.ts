@@ -1463,6 +1463,68 @@ describe('mayara-server-signalk-plugin container integration', () => {
     })
   })
 
+  describe('GET /api/gui-url', () => {
+    it('returns the proxy path by default', async () => {
+      const { router, plugin } = await loadPlugin()
+      const res = makeRes()
+      await getHandler(router, 'GET /api/gui-url')({ hostname: 'boat.local' }, res)
+      expect(res.body).toEqual({ url: '/plugins/mayara-server-signalk-plugin/gui/' })
+      await plugin.stop()
+    })
+
+    it('returns mayara’s own host:port when directGuiUrl is set', async () => {
+      const { router, plugin } = await loadPlugin({ directGuiUrl: true, port: 6502 })
+      const res = makeRes()
+      await getHandler(router, 'GET /api/gui-url')({ hostname: 'boat.local' }, res)
+      expect(res.body).toEqual({ url: 'http://boat.local:6502/gui/' })
+      await plugin.stop()
+    })
+
+    it('uses the request hostname, not the configured host', async () => {
+      // In container mode `host` is `localhost`, which names the machine
+      // running the browser rather than the one running mayara. Building the
+      // direct URL from it would send every remote browser to itself, so the
+      // hostname the browser already reached Signal K on is used instead.
+      const { router, plugin } = await loadPlugin({
+        directGuiUrl: true,
+        host: 'localhost',
+        port: 6502
+      })
+      const res = makeRes()
+      await getHandler(router, 'GET /api/gui-url')({ hostname: '192.168.0.122' }, res)
+      expect(res.body).toEqual({ url: 'http://192.168.0.122:6502/gui/' })
+      await plugin.stop()
+    })
+
+    it('uses the configured host in external mode', async () => {
+      // External mode is precisely the case where mayara runs on another
+      // machine, so the request hostname (the Signal K server) is the wrong
+      // target — the configured host is the only thing that names mayara.
+      const { router, plugin } = await loadPlugin({
+        directGuiUrl: true,
+        managedContainer: false,
+        host: 'radar-box.local',
+        port: 6502
+      })
+      const res = makeRes()
+      await getHandler(router, 'GET /api/gui-url')({ hostname: '192.168.0.122' }, res)
+      expect(res.body).toEqual({ url: 'http://radar-box.local:6502/gui/' })
+      await plugin.stop()
+    })
+
+    it('uses https when secure is set', async () => {
+      const { router, plugin } = await loadPlugin({
+        directGuiUrl: true,
+        secure: true,
+        port: 6502
+      })
+      const res = makeRes()
+      await getHandler(router, 'GET /api/gui-url')({ hostname: 'boat.local' }, res)
+      expect(res.body).toEqual({ url: 'https://boat.local:6502/gui/' })
+      await plugin.stop()
+    })
+  })
+
   describe('plugin.stop() lifecycle', () => {
     it('unregisters from update service and stops the container', async () => {
       const { plugin, containers } = await loadPlugin()

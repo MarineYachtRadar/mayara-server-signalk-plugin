@@ -33,10 +33,13 @@ function main() {
   }
   fs.copyFileSync(logoSrc, logoDest)
 
-  // Create redirect page. The target is a same-origin path served by
-  // the plugin's reverse proxy in src/index.ts, so the browser stays
-  // on the SK server's host/port (3000 or 443). Works identically over
-  // HTTP and HTTPS; only the SK port needs to be open externally.
+  // Create redirect page. The target is resolved at runtime from
+  // /api/gui-url, because it depends on the `directGuiUrl` setting: by
+  // default a same-origin path served by the plugin's reverse proxy (the
+  // browser stays on the SK server's host/port, so HTTPS works and only
+  // the SK port needs to be open), or mayara's own host:port when the
+  // operator has opted out of the proxy. The proxy path is the fallback
+  // if that request fails, preserving the previous behaviour.
   fs.writeFileSync(
     path.join(publicDest, 'index.html'),
     `<!DOCTYPE html>
@@ -46,7 +49,13 @@ function main() {
   <title>MaYaRa Radar</title>
   <link rel="icon" type="image/png" href="assets/mayara_logo.png">
   <script>
-    window.location.replace('/plugins/mayara-server-signalk-plugin/gui/');
+    var PROXY_URL = '/plugins/mayara-server-signalk-plugin/gui/';
+    fetch('/plugins/mayara-server-signalk-plugin/api/gui-url')
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        window.location.replace(j && typeof j.url === 'string' ? j.url : PROXY_URL);
+      })
+      .catch(function () { window.location.replace(PROXY_URL); });
   </script>
   <style>
     body { font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #111; color: #ccc; }
@@ -58,6 +67,12 @@ function main() {
   <div class="box">
     <img src="assets/mayara_logo.png" alt="MaYaRa">
     <p id="msg">Opening radar UI...</p>
+    <!-- Without scripting the fetch above never runs, so offer the proxy
+         path — always valid, and the default when directGuiUrl is off — as
+         a plain link rather than leaving the page stuck on "Opening…". -->
+    <noscript>
+      <p><a href="/plugins/mayara-server-signalk-plugin/gui/">Open the radar UI</a></p>
+    </noscript>
   </div>
 </body>
 </html>

@@ -469,8 +469,27 @@ export default function (app) {
                     res.status(500).json({ error: errMsg(err) });
                 }
             });
-            router.get('/api/gui-url', (_req, res) => {
-                res.json({ url: `${GUI_PROXY_PATH}/` });
+            router.get('/api/gui-url', (req, res) => {
+                if (!currentSettings?.directGuiUrl) {
+                    res.json({ url: `${GUI_PROXY_PATH}/` });
+                    return;
+                }
+                // Which host the browser should be sent to depends on where mayara
+                // actually runs.
+                //
+                // External mode: `host` names another machine, which is the whole
+                // point of the setting — use it verbatim.
+                //
+                // Container mode: mayara runs alongside Signal K and `host` is
+                // `localhost`, which from a remote browser names that browser's own
+                // machine. Reuse the hostname the browser already reached Signal K
+                // on instead, so the link works from anywhere on the network.
+                const port = currentSettings.port ?? 6502;
+                const proto = currentSettings.secure ? 'https' : 'http';
+                const hostname = currentSettings.managedContainer === false
+                    ? (currentSettings.host ?? 'localhost')
+                    : req.hostname || currentSettings.host || 'localhost';
+                res.json({ url: `${proto}://${hostname}:${port}/gui/` });
             });
             // Lists available image tags for the version dropdown in the config
             // panel: GitHub release tags plus per-PR test images. signalk-container's
