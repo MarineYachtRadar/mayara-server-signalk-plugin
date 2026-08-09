@@ -1546,6 +1546,9 @@ describe('mayara-server-signalk-plugin container integration', () => {
       const res = makeRes()
       await getHandler(router, 'GET /api/gui-url')({ hostname: 'boat.local' }, res)
       expect(res.body).toEqual({ url: 'http://[fd00::2]:6502/gui/' })
+      // loadPlugin() calls vi.resetModules(), so the first instance is torn
+      // down before the second starts rather than leaving two live.
+      await plugin.stop()
 
       const { router: r2, plugin: p2 } = await loadPlugin({
         managedContainer: false,
@@ -1555,8 +1558,6 @@ describe('mayara-server-signalk-plugin container integration', () => {
       const res2 = makeRes()
       await getHandler(r2, 'GET /api/gui-url')({ hostname: 'boat.local' }, res2)
       expect(res2.body).toEqual({ url: 'http://[fd00::3]:6502/gui/' })
-
-      await plugin.stop()
       await p2.stop()
     })
 
