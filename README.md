@@ -134,19 +134,13 @@ Set **Managed container** to off to connect to a mayara-server instance running 
 
 ### Radar Display
 
-The webapp opens mayara-server's built-in GUI proxied through the Signal K
-server at `/plugins/mayara-server-signalk-plugin/gui/`, so only the Signal K
-port needs to be reachable — mayara-server's own port (6502) does not have to
-be exposed. The proxy forwards the GUI's REST calls and its radar/state/spoke
-WebSocket streams to mayara-server, over both HTTP and HTTPS.
-
-Enabling **Open the radar GUI directly on mayara-server** sends the browser to
-mayara-server's own port instead, bypassing the proxy. The AIS overlay still
-works — mayara-server relays vessels from Signal K into its own store — but
-mayara-server's port must then be reachable from the browser. The transport
-follows the **Use HTTPS/WSS** setting: with it off the GUI is served over plain
-HTTP and cannot be opened from an HTTPS Signal K page without a mixed-content
-warning.
+The webapp opens mayara-server's built-in GUI directly on mayara-server's own
+port (6502 by default), so that port must be reachable from the browser. The
+AIS overlay is unaffected — mayara-server relays vessels from Signal K into its
+own store, so the same targets appear. The transport follows the **Use
+HTTPS/WSS** setting. With it off the GUI runs over unencrypted HTTP, even when
+Signal K itself is served over HTTPS — enable HTTPS/WSS when the radar session
+needs transport protection.
 
 The host is resolved to match where mayara-server runs. When the plugin manages
 the container, mayara-server is on the same machine as Signal K, so the address
@@ -154,6 +148,15 @@ the browser already used to reach Signal K is reused and the link works from
 anywhere on the network. In external mode the configured **mayara-server host**
 is used, since it names a different machine. The port always comes from the
 plugin configuration.
+
+Disabling **Open the radar GUI directly on mayara-server** routes the GUI
+through Signal K instead. The browser then stays on the Signal K port and
+inherits its TLS, so only that port needs to be reachable. Choose this if
+mayara-server's port is closed to the network, or if Signal K is served over
+TLS and the radar session should be encrypted too.
+
+Note that upgrading from a version without this setting adopts the new default:
+installations that relied on the proxy need to disable it explicitly.
 
 ## Features
 

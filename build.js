@@ -34,12 +34,12 @@ function main() {
   fs.copyFileSync(logoSrc, logoDest)
 
   // Create redirect page. The target is resolved at runtime from
-  // /api/gui-url, because it depends on the `directGuiUrl` setting: by
-  // default a same-origin path served by the plugin's reverse proxy (the
-  // browser stays on the SK server's host/port, so HTTPS works and only
-  // the SK port needs to be open), or mayara's own host:port when the
-  // operator has opted out of the proxy. The proxy path is the fallback
-  // if that request fails, preserving the previous behaviour.
+  // /api/gui-url, because it depends on the `directGuiUrl` setting:
+  // mayara's own host:port by default, or a same-origin path served by the
+  // plugin's reverse proxy when the operator disables it (the browser then
+  // stays on the SK server's host/port, inheriting its TLS, and only the SK
+  // port needs to be open). The proxy path is also the fallback if the
+  // request fails, since it is valid in either configuration.
   fs.writeFileSync(
     path.join(publicDest, 'index.html'),
     `<!DOCTYPE html>

@@ -489,7 +489,11 @@ export default function (app) {
                 const hostname = currentSettings.managedContainer === false
                     ? (currentSettings.host ?? 'localhost')
                     : req.hostname || currentSettings.host || 'localhost';
-                res.json({ url: `${proto}://${hostname}:${port}/gui/` });
+                // Express reports IPv6 hosts without the brackets the URL syntax
+                // requires, and a configured host may be written either way. Without
+                // them `http://::1:6502/gui/` is not a parseable URL at all.
+                const authority = hostname.includes(':') && !hostname.startsWith('[') ? `[${hostname}]` : hostname;
+                res.json({ url: `${proto}://${authority}:${port}/gui/` });
             });
             // Lists available image tags for the version dropdown in the config
             // panel: GitHub release tags plus per-PR test images. signalk-container's
