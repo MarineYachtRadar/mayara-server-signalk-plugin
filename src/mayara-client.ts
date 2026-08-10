@@ -89,7 +89,14 @@ export class MayaraClient {
   }
 
   async setControl(radarId: string, controlId: string, value: unknown): Promise<unknown> {
-    return this.request('PUT', `${API_BASE}/${radarId}/controls/${controlId}`, { value })
+    // A scalar gets the Signal K `{ value }` envelope; a compound payload is
+    // already the body mayara expects and must go through as-is. Wrapping it
+    // unconditionally produced `{ value: { enabled: …, endDistance: … } }`,
+    // which mayara rejects with "Cannot control 'guardZone2' to value {…}" —
+    // so guard zones and no-transmit sectors could not be set at all.
+    const body =
+      value !== null && typeof value === 'object' && !Array.isArray(value) ? value : { value }
+    return this.request('PUT', `${API_BASE}/${radarId}/controls/${controlId}`, body)
   }
 
   async setControls(radarId: string, controls: Record<string, unknown>): Promise<unknown> {
