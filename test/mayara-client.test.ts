@@ -70,6 +70,33 @@ describe('MayaraClient', () => {
     expect(JSON.parse(receivedBody)).toEqual({ value: 'transmit' })
   })
 
+  it('sends a compound control payload unwrapped', async () => {
+    // A guard zone's `value` is its start bearing, one field among several.
+    // Wrapping it again would produce { value: { enabled, endValue, … } },
+    // which mayara rejects — so zones and sectors could not be set at all.
+    let receivedBody = ''
+    serverPort = await createTestServer((req, res) => {
+      expect(req.method).toBe('PUT')
+      expect(req.url).toBe('/signalk/v2/api/vessels/self/radars/radar-0/controls/guardZone1')
+      req.on('data', (chunk: string) => (receivedBody += chunk))
+      req.on('end', () => {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ success: true }))
+      })
+    })
+
+    const zone = {
+      enabled: true,
+      value: -0.5585,
+      endValue: 1.7104,
+      startDistance: 100,
+      endDistance: 500
+    }
+    const client = new MayaraClient({ host: 'localhost', port: serverPort })
+    await client.setControl('radar-0', 'guardZone1', zone)
+    expect(JSON.parse(receivedBody)).toEqual(zone)
+  })
+
   it('rejects on HTTP error status', async () => {
     serverPort = await createTestServer((req, res) => {
       res.writeHead(404)
