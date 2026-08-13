@@ -17,7 +17,7 @@ The plugin is a **thin proxy**: it registers as a Radar API provider, forwards c
 - `mayara-client.ts` — HTTP(S) client for mayara's `/signalk/v2/api/vessels/self/radars/*` (list, capabilities, controls, targets). No protocol logic, just request plumbing.
 - `radar-provider.ts` — implements `radar.RadarProviderMethods`, registered with the server via `app.radarApi.register(PLUGIN_ID, …)`. Translates Radar API calls into `MayaraClient` requests.
 - `spoke-forwarder.ts` — one per radar; a WebSocket client that pipes mayara's binary spoke stream into `app.binaryStreamManager.emitData('radars/<id>', buf)`. Reconnects with backoff.
-- `notification-forwarder.ts` — subscribes to `notifications.*` on mayara's Signal K **v1** stream and republishes the deltas upstream via `app.handleMessage()` (e.g. guard-zone alarms). Filters out non-notification paths.
+- `delta-forwarder.ts` — subscribes to mayara's Signal K **v1** stream and republishes the deltas upstream via `app.handleMessage()`, keeping the value entries whose path starts with one of the configured prefixes. Configured in `index.ts` with `notifications.` (guard-zone alarms) and `radars.` (control and target state); the defaults are notifications alone.
 - `gui-proxy-path.ts` — the pure `rewriteGuiProxyPath` used by the GUI reverse proxy: `/signalk…` and `/v2…` pass straight through to mayara, everything else gets `/gui` prepended for the static asset server.
 - `signalk-token.ts` — the device-access-request flow (POST request, poll for approval, validate) plus token-cache file helpers.
 - `config/schema.ts` — `ConfigSchema` (the Admin-UI form) and `SCHEMA_DEFAULTS` (the runtime default merge — see the gotcha below).

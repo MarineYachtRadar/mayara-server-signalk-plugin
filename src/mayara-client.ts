@@ -133,7 +133,7 @@ export class MayaraClient {
   }
 
   /**
-   * mayara's Signal K v1 stream. Used by NotificationForwarder to relay
+   * mayara's Signal K v1 stream. Used by DeltaForwarder to relay
    * `notifications.*` and `radars.*` deltas upstream.
    *
    * `?subscribe=none` is deliberate: under Signal K's subscription model the

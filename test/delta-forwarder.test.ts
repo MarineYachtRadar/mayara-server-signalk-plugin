@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { NotificationForwarder } from '../src/notification-forwarder.js'
+import { DeltaForwarder } from '../src/delta-forwarder.js'
 import http from 'http'
 import { WebSocketServer, WebSocket } from 'ws'
 
@@ -31,7 +31,7 @@ function makeApp() {
   }
 }
 
-describe('NotificationForwarder', () => {
+describe('DeltaForwarder', () => {
   it('subscribes to notifications.* on connect', async () => {
     const port = await createWsServer()
     const app = makeApp()
@@ -45,7 +45,7 @@ describe('NotificationForwarder', () => {
       })
     })
 
-    const forwarder = new NotificationForwarder(app, {
+    const forwarder = new DeltaForwarder(app, {
       pluginId: 'test-plugin',
       url: `ws://localhost:${port}`,
       reconnectInterval: 100
@@ -67,7 +67,7 @@ describe('NotificationForwarder', () => {
       wss?.on('connection', resolve)
     })
 
-    const forwarder = new NotificationForwarder(app, {
+    const forwarder = new DeltaForwarder(app, {
       pluginId: 'test-plugin',
       url: `ws://localhost:${port}`,
       reconnectInterval: 100
@@ -118,7 +118,7 @@ describe('NotificationForwarder', () => {
       wss?.on('connection', resolve)
     })
 
-    const forwarder = new NotificationForwarder(app, {
+    const forwarder = new DeltaForwarder(app, {
       pluginId: 'test-plugin',
       url: `ws://localhost:${port}`,
       reconnectInterval: 100
@@ -163,7 +163,7 @@ describe('NotificationForwarder', () => {
       wss?.on('connection', resolve)
     })
 
-    const forwarder = new NotificationForwarder(app, {
+    const forwarder = new DeltaForwarder(app, {
       pluginId: 'test-plugin',
       url: `ws://localhost:${port}`,
       reconnectInterval: 100
@@ -194,7 +194,7 @@ describe('NotificationForwarder', () => {
       wss?.on('connection', resolve)
     })
 
-    const forwarder = new NotificationForwarder(app, {
+    const forwarder = new DeltaForwarder(app, {
       pluginId: 'test-plugin',
       url: `ws://localhost:${port}`,
       reconnectInterval: 100
@@ -219,7 +219,7 @@ describe('NotificationForwarder', () => {
     vi.useFakeTimers()
     try {
       const app = makeApp()
-      const forwarder = new NotificationForwarder(app, {
+      const forwarder = new DeltaForwarder(app, {
         pluginId: 'test-plugin',
         url: 'ws://localhost:1',
         reconnectInterval: 50
@@ -249,7 +249,7 @@ describe('NotificationForwarder', () => {
       })
     })
 
-    const forwarder = new NotificationForwarder(app, {
+    const forwarder = new DeltaForwarder(app, {
       pluginId: 'test-plugin',
       url: `ws://localhost:${port}`
     })
