@@ -6,12 +6,12 @@ import type { Delta } from '@signalk/server-api'
  * minimum so the unit tests can pass a stub without dragging in the full
  * server-api types.
  */
-export interface NotificationForwarderApp {
+export interface DeltaForwarderApp {
   handleMessage(id: string, msg: Partial<Delta>): void
   debug?(msg: string): void
 }
 
-export interface NotificationForwarderOptions {
+export interface DeltaForwarderOptions {
   /**
    * Plugin id used when calling `app.handleMessage`. Signal K stamps
    * the republished delta's `$source` from this; passing the same id
@@ -64,7 +64,7 @@ export interface NotificationForwarderOptions {
  * shaped it to the SK spec — and the SK server stamps `$source` from
  * `pluginId` and `context` = self on republish.
  */
-export class NotificationForwarder {
+export class DeltaForwarder {
   private readonly pluginId: string
   private readonly url: string
   private readonly subscriptions: Array<{ path: string; policy: string }>
@@ -77,9 +77,9 @@ export class NotificationForwarder {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private closed = false
   private connected = false
-  private readonly app: NotificationForwarderApp
+  private readonly app: DeltaForwarderApp
 
-  constructor(app: NotificationForwarderApp, options: NotificationForwarderOptions) {
+  constructor(app: DeltaForwarderApp, options: DeltaForwarderOptions) {
     this.app = app
     this.pluginId = options.pluginId
     this.url = options.url
@@ -99,7 +99,7 @@ export class NotificationForwarder {
   private connect(): void {
     if (this.closed) return
 
-    this.debug(`Connecting to notification stream: ${this.url}`)
+    this.debug(`Connecting to the mayara stream: ${this.url}`)
 
     try {
       const ws = this.webSocketFactory(this.url)
@@ -107,7 +107,7 @@ export class NotificationForwarder {
 
       ws.on('open', () => {
         this.connected = true
-        this.debug('Connected to mayara notification stream')
+        this.debug('Connected to the mayara stream')
 
         // Tell mayara which deltas we want. Wildcards mean we pick up every
         // radar's alarms/state without having to know radar ids up front.
@@ -118,7 +118,7 @@ export class NotificationForwarder {
           ws.send(subscription)
         } catch (err) {
           this.debug(
-            `Failed to send notification subscription: ${err instanceof Error ? err.message : String(err)}`
+            `Failed to send subscription: ${err instanceof Error ? err.message : String(err)}`
           )
         }
       })
@@ -129,28 +129,28 @@ export class NotificationForwarder {
 
       ws.on('error', (err: Error) => {
         this.connected = false
-        this.debug(`Notification stream error: ${err.message}`)
+        this.debug(`mayara stream error: ${err.message}`)
       })
 
       ws.on('close', (code: number) => {
         this.connected = false
-        this.debug(`Notification stream closed: ${code}`)
+        this.debug(`mayara stream closed: ${code}`)
         if (!this.closed) {
           this.scheduleReconnect()
         }
       })
     } catch (err) {
       this.debug(
-        `Failed to connect to notification stream: ${err instanceof Error ? err.message : String(err)}`
+        `Failed to connect to the mayara stream: ${err instanceof Error ? err.message : String(err)}`
       )
       this.scheduleReconnect()
     }
   }
 
   /**
-   * Parse one inbound text frame and forward every notification-pathed
+   * Parse one inbound text frame and forward every subscribed-path
    * value entry to the host SK server. Non-text frames, non-JSON
-   * payloads, deltas with no notification entries, and the upstream
+   * payloads, deltas with nothing at a subscribed path, and the upstream
    * "hello" handshake are all silently dropped.
    *
    * Exposed `protected` so the tests can inject frames without going
@@ -226,7 +226,7 @@ export class NotificationForwarder {
   private scheduleReconnect(): void {
     if (this.closed || this.reconnectTimer) return
 
-    this.debug(`Scheduling notification stream reconnect in ${this.reconnectMs}ms`)
+    this.debug(`Scheduling reconnect to the mayara stream in ${this.reconnectMs}ms`)
 
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
@@ -258,7 +258,7 @@ export class NotificationForwarder {
     }
 
     this.connected = false
-    this.debug('Stopped notification forwarder')
+    this.debug('Stopped delta forwarder')
   }
 }
 

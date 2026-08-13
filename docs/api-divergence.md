@@ -53,7 +53,7 @@ reconciled.
 | spoke-length field                        | `maxSpokeLength`                                        | list: `maxSpokeLen`; capabilities: `maxSpokeLength`                                                                               | —                                                                                                                      |
 | `capabilities`                            | spec format                                             | same spec format (incl. `legend.pixels`)                                                                                          | proxied                                                                                                                |
 | **spoke stream** (binary, `spokeDataUrl`) | `…/radars/{id}/spokes` binary protobuf WS               | binary forwarding **implemented but mis-pathed at `…/radars/{id}/stream`** (`src/api/streams/index.ts`), not the spec's `/spokes` | emits into `binaryStreamManager` (streamId `radars/{id}`) — client-exposed by that endpoint                            |
-| **control stream** (JSON, `streamUrl`)    | `radars.{id}.controls.*` deltas on `/signalk/v1/stream` | the standard SK delta/PUT stream **already exists**; it just carries no `radars.*` yet                                            | subscribes to mayara's v1 stream but **filters to notifications only** — radar deltas not republished, no PUT handlers |
+| **control stream** (JSON, `streamUrl`)    | `radars.{id}.controls.*` deltas on `/signalk/v1/stream` | the standard SK delta/PUT stream **already exists**; it carries whatever a provider republishes onto it                           | subscribes to mayara's v1 stream and republishes `notifications.*` and `radars.*`; PUT handlers registered per control |
 
 Re-verified 2026-07-19 against the current `../signalk-server` tree (`radar_api.md`
 last touched Jun 21, commit `9cd2ebe0` "Radar API refactored"; impl predates it):
@@ -97,12 +97,11 @@ lives in a _different_ module than the radar API:
 plugin-side.** Signal K's `/signalk/v1/stream` already does deltas (out) and PUTs
 (in); the gap is purely that radar data is not bridged across it:
 
-- **mayara → SK (state out).** The plugin already connects to mayara's v1 stream
-  but `notification-forwarder.ts` **filters to `notifications.*`**, so SK's
-  `/signalk/v1/stream` carries **no `radars.*` paths** (verified: 98 messages, none).
-  Widening the forwarder to also republish `radars.*` deltas via
-  `app.handleMessage()` (stamping the proper `context`) surfaces live radar state
-  to every SK subscriber.
+- **mayara → SK (state out).** `delta-forwarder.ts` subscribes to
+  `notifications.*` and `radars.*` on mayara's v1 stream and republishes both via
+  `app.handleMessage()`, so SK's `/signalk/v1/stream` and data model carry
+  `radars.{id}.controls.*` and `radars.{id}.targets.*`. Targets depend on mayara
+  answering a `radars.*` subscription with them, which it does from 3.8.2.
 - **SK → mayara (control in).** A client changes a control with a Signal K PUT
   (over the v1 stream or REST). The plugin registers
   `app.registerPutHandler('vessels.self', 'radars.<id>.controls.<control>', …)`
@@ -256,11 +255,11 @@ streamUrl }`. The fields dropped from the list — `status`, `range`, `controls`
    working transport, not new infrastructure. (b) **Control `/signalk/v1/stream`** —
    **no signalk-server endpoint is needed**: SK's v1 stream already does deltas (out)
    and PUTs (in), and mayara already models controls as `radars.{id}.controls.*` on
-   its own v1 stream (observed 2026-07-20). The gap is purely the plugin-side bridge:
-   widen `notification-forwarder.ts` (currently `notifications.*`-only) to also
-   republish `radars.*` deltas, and register `app.registerPutHandler(...)` for
-   `radars.<id>.controls.*` that forwards to mayara's control PUT. Also fix the stale
-   `radar/index.ts:812` note to reference `/spokes` and `/signalk/v1/stream`.
+   its own v1 stream (observed 2026-07-20). The plugin-side bridge carries it:
+   `delta-forwarder.ts` republishes `radars.*` alongside `notifications.*`, and
+   `app.registerPutHandler(...)` is registered for `radars.<id>.controls.*`
+   forwarding to mayara's control PUT. The stale `radar/index.ts:812` note still
+   refers to the wrong paths.
 5. **Field naming.** `maxSpokeLength` consistently (it leaves the list entirely and
    lives only in `/capabilities`, where it is already spelled `maxSpokeLength`, so the
    `maxSpokeLen` spelling disappears with the lean list).
@@ -283,8 +282,8 @@ current rich array, and the reason the `#2357` refactor went the other way.
 | 2   | `signalk-server` `src/api/radar/index.ts`                                           | `getRadars()` builds the keyed `{ version, radars }` object; stop cramming state into list entries                                                                                                                              | todo                                                    |
 | 3   | `signalk-server` `src/api/radar/openApi.ts`                                         | Wrap the list response; it is already lean, so mostly response-envelope alignment                                                                                                                                               | todo                                                    |
 | 4a  | `signalk-server` `src/api/streams/index.ts` + `src/api/radar/asyncApi.ts`           | Move the binary spoke forwarding from `/stream` to `/spokes` on the upgrade listener; realign `asyncApi.ts`; fix the stale `radar/index.ts:812` note                                                                            | todo                                                    |
-| 4b  | **this plugin** `notification-forwarder.ts` (or a new forwarder)                    | Widen the mayara→SK forwarder to republish `radars.*` deltas, not just `notifications.*`, so radar state appears on SK's `/signalk/v1/stream`                                                                                   | todo                                                    |
-| 4c  | **this plugin** `src/index.ts` + `radar-provider.ts`                                | Register `app.registerPutHandler` for `radars.<id>.controls.*` → forward to mayara control PUT (SK→mayara control-in)                                                                                                           | todo                                                    |
+| 4b  | **this plugin** `delta-forwarder.ts`                                                | Widen the mayara→SK forwarder to republish `radars.*` deltas, not just `notifications.*`, so radar state appears on SK's `/signalk/v1/stream`                                                                                   | done                                                    |
+| 4c  | **this plugin** `src/index.ts` + `radar-provider.ts`                                | Register `app.registerPutHandler` for `radars.<id>.controls.*` → forward to mayara control PUT (SK→mayara control-in)                                                                                                           | done                                                    |
 | 5   | **this plugin** `src/radar-provider.ts` + tests                                     | `getRadarInfo` returns the lean object (`name`/`brand`/`model?`/`radarIpAddress`); may omit `spokeDataUrl`/`streamUrl` so clients use signalk-server's forwarded endpoints; status/range/controls already covered by `getState` | todo                                                    |
 
 Per this repo's PR discipline these are separate PRs, sequenced server-api →
