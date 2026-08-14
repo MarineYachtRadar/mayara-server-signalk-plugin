@@ -5,7 +5,7 @@ import { MayaraClient } from './mayara-client.js';
 import { rewriteGuiProxyPath } from './gui-proxy-path.js';
 import { createRadarProvider } from './radar-provider.js';
 import { SpokeForwarder } from './spoke-forwarder.js';
-import { NotificationForwarder } from './notification-forwarder.js';
+import { DeltaForwarder } from './delta-forwarder.js';
 import { ConfigSchema, SCHEMA_DEFAULTS } from './config/schema.js';
 import { awaitApproval, beginTokenRequest, deleteCachedToken, readCachedToken, readGithubToken, validateCachedToken, writeCachedToken } from './signalk-token.js';
 const MAYARA_IMAGE = 'ghcr.io/marineyachtradar/mayara-server';
@@ -56,7 +56,7 @@ export default function (app) {
     // Single instance: mayara emits notifications on the server-wide v1
     // stream, not per-radar, so we only need one connection regardless of
     // how many radars are discovered.
-    let notificationForwarder = null;
+    let deltaForwarder = null;
     let discoveryInterval = null;
     // Monotonic generation for the token-acquisition loop. Bumped on every
     // start() and stop(); each recovery loop captures the value at launch and
@@ -125,9 +125,9 @@ export default function (app) {
             }
             spokeForwarders.clear();
             knownRadars.clear();
-            if (notificationForwarder) {
-                notificationForwarder.stop();
-                notificationForwarder = null;
+            if (deltaForwarder) {
+                deltaForwarder.stop();
+                deltaForwarder = null;
             }
             if (client) {
                 client.close();
@@ -370,8 +370,8 @@ export default function (app) {
                         radarId: id,
                         connected: spokeForwarders.get(id)?.isConnected() ?? false
                     })),
-                    notificationForwarder: {
-                        connected: notificationForwarder?.isConnected() ?? false
+                    deltaForwarder: {
+                        connected: deltaForwarder?.isConnected() ?? false
                     },
                     container: {
                         state: containerState,
@@ -991,12 +991,13 @@ export default function (app) {
                 }
             }
         }
-        // Bring up the notification forwarder before discovery so the very
-        // first guard-zone alarm a radar fires reaches the upstream Signal
-        // K server. The forwarder owns its own reconnect loop, so failing
-        // here just means it'll reach mayara on a later attempt.
-        if (!notificationForwarder) {
-            notificationForwarder = new NotificationForwarder(app, {
+        // Bring the forwarder up before discovery so the very first thing a
+        // radar says — a guard-zone alarm, a control value — reaches the
+        // upstream Signal K server. The forwarder owns its own reconnect
+        // loop, so failing here just means it'll reach mayara on a later
+        // attempt.
+        if (!deltaForwarder) {
+            deltaForwarder = new DeltaForwarder(app, {
                 pluginId: PLUGIN_ID,
                 url: client.getStateStreamUrl(),
                 // Relay both guard-zone notifications and radar control/target state
@@ -1012,7 +1013,7 @@ export default function (app) {
                 debug: app.debug.bind(app),
                 reconnectInterval: (settings.reconnectInterval || 5) * 1000
             });
-            notificationForwarder.start();
+            deltaForwarder.start();
         }
         await connectAndDiscover(settings);
     }
