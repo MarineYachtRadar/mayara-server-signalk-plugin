@@ -69,6 +69,17 @@ export const ConfigSchema = Type.Object({
     title: 'Reconnect interval (seconds)',
     minimum: 1,
     maximum: 30
+  }),
+
+  telemetry: Type.Boolean({
+    default: true,
+    title: 'Report anonymous usage stats to the mayara developers',
+    description:
+      'Tells mayara-server it is fine to report, at most twice per run, ' +
+      'that this install works (a radar delivering data, a radar accepting ' +
+      'a control change) -- never a position, serial number, or network ' +
+      "address. Disable to keep mayara silent; either way, mayara-server's " +
+      'own GUI never asks this question when running through the plugin.'
   })
 })
 
@@ -91,5 +102,6 @@ export const SCHEMA_DEFAULTS: Config = {
   secure: false,
   directGuiUrl: true,
   discoveryPollInterval: 10,
-  reconnectInterval: 5
+  reconnectInterval: 5,
+  telemetry: true
 }

@@ -13,6 +13,7 @@ interface PanelConfig {
   secure?: boolean
   discoveryPollInterval?: number
   reconnectInterval?: number
+  telemetry?: boolean
 }
 
 /** Props the Signal K Admin UI passes to a federated config panel. */
@@ -403,6 +404,7 @@ export default function PluginConfigurationPanel({
     String(cfg.discoveryPollInterval ?? 10)
   )
   const [reconnectInterval, setReconnectInterval] = useState(String(cfg.reconnectInterval ?? 5))
+  const [telemetry, setTelemetry] = useState(cfg.telemetry !== false)
 
   const [versions, setVersions] = useState<VersionEntry[]>([])
   const [versionsLoading, setVersionsLoading] = useState(false)
@@ -504,7 +506,8 @@ export default function PluginConfigurationPanel({
       port: portValue,
       secure,
       discoveryPollInterval: discoveryValue,
-      reconnectInterval: reconnectValue
+      reconnectInterval: reconnectValue,
+      telemetry
     })
     setActionStatus('Saved! Plugin will restart.')
     setStatusError(false)
@@ -771,6 +774,25 @@ export default function PluginConfigurationPanel({
               <span style={{ ...S.hint, color: '#ef4444' }}>{versionsError}</span>
             </div>
           )}
+
+          <div style={S.fieldRow}>
+            <label style={S.label} htmlFor="mayara-telemetry">
+              Report anonymous usage stats
+            </label>
+            <input
+              id="mayara-telemetry"
+              type="checkbox"
+              style={S.checkbox}
+              checked={telemetry}
+              onChange={(e) => {
+                setTelemetry(e.target.checked)
+              }}
+            />
+            <span style={S.hint}>
+              Tells the mayara developers, at most twice per run, that this install works — never a
+              position, serial number, or network address
+            </span>
+          </div>
 
           <CollapsibleSection title="Advanced">
             <div style={S.fieldRow}>

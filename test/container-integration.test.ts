@@ -1114,6 +1114,7 @@ describe('mayara-server-signalk-plugin container integration', () => {
       expect(command[navIdx + 1]).toMatch(/^ws:127\.0\.0\.1:\d+$/)
       expect(config.env).toEqual({
         MAYARA_DEPLOYMENT: 'signalk-server-plugin',
+        MAYARA_TELEMETRY: 'true',
         MAYARA_SIGNALK_TOKEN: 'cached-jwt-abc'
       })
       // No bind mount needed for the token under env-var delivery.
@@ -1142,6 +1143,7 @@ describe('mayara-server-signalk-plugin container integration', () => {
       expect(command).toContain('--accept-invalid-certs')
       expect(config.env).toEqual({
         MAYARA_DEPLOYMENT: 'signalk-server-plugin',
+        MAYARA_TELEMETRY: 'true',
         MAYARA_SIGNALK_TOKEN: 'cached-jwt-abc'
       })
 
