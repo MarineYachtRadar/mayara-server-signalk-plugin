@@ -1112,7 +1112,10 @@ describe('mayara-server-signalk-plugin container integration', () => {
       expect(command).not.toContain('--accept-invalid-certs')
       const navIdx = command.indexOf('-n')
       expect(command[navIdx + 1]).toMatch(/^ws:127\.0\.0\.1:\d+$/)
-      expect(config.env).toEqual({ MAYARA_SIGNALK_TOKEN: 'cached-jwt-abc' })
+      expect(config.env).toEqual({
+        MAYARA_DEPLOYMENT: 'signalk-server-plugin',
+        MAYARA_SIGNALK_TOKEN: 'cached-jwt-abc'
+      })
       // No bind mount needed for the token under env-var delivery.
       expect(config.volumes).toBeUndefined()
 
@@ -1137,7 +1140,10 @@ describe('mayara-server-signalk-plugin container integration', () => {
       const navIdx = command.indexOf('-n')
       expect(command[navIdx + 1]).toBe('wss:127.0.0.1:8443')
       expect(command).toContain('--accept-invalid-certs')
-      expect(config.env).toEqual({ MAYARA_SIGNALK_TOKEN: 'cached-jwt-abc' })
+      expect(config.env).toEqual({
+        MAYARA_DEPLOYMENT: 'signalk-server-plugin',
+        MAYARA_SIGNALK_TOKEN: 'cached-jwt-abc'
+      })
 
       vi.mocked(tokenModule.readCachedToken).mockReturnValue(undefined)
       await plugin.stop()
