@@ -10,6 +10,7 @@ export declare const ConfigSchema: Type.TObject<{
     directGuiUrl: Type.TBoolean;
     discoveryPollInterval: Type.TNumber;
     reconnectInterval: Type.TNumber;
+    telemetry: Type.TBoolean;
 }>;
 export type Config = Static<typeof ConfigSchema>;
 export declare const SCHEMA_DEFAULTS: Config;

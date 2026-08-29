@@ -790,6 +790,11 @@ export default function (app: MayaraServerAPI): Plugin {
     // plugin, distinct from `container` (the standalone image) or a bare
     // `standalone`/`embedded` guess.
     env.MAYARA_DEPLOYMENT = 'signalk-server-plugin'
+    // Answers mayara's "inform developers of successful deploy?" consent
+    // question for it, so its own GUI never has to ask: this plugin's
+    // "telemetry" setting is the only place a user sees that question when
+    // running mayara-server through it.
+    env.MAYARA_TELEMETRY = (currentSettings?.telemetry ?? true) ? 'true' : 'false'
 
     if (!userOverridesNav) {
       if (cachedToken !== undefined) {
