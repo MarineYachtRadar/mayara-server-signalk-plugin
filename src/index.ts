@@ -44,6 +44,28 @@ const PLUGIN_ID = 'mayara-server-signalk-plugin'
 const GUI_PROXY_PATH = `/plugins/${PLUGIN_ID}/gui`
 
 /**
+ * Where the plugin's Signal K data dir is mounted inside the container.
+ * signalk-container resolves the host-side source itself, so this works
+ * whether Signal K runs bare-metal or in its own container.
+ */
+const DATA_MOUNT = '/skdata'
+
+/**
+ * Config home for the in-container mayara process, inside `DATA_MOUNT` so
+ * its `settings.json` — radar names, guard zones, exclusion zones, range
+ * units — outlives the container. Without it that file sits in the
+ * container's writable layer, and every recreate (an auto-update on the
+ * floating tag, a token refresh, any command change) silently resets the
+ * user's radar setup.
+ *
+ * A subdirectory rather than `DATA_MOUNT` itself: the data dir also holds
+ * our Signal K device token and cached GitHub token, which mayara has no
+ * business sharing a directory with. mayara's `directories` crate honours
+ * `XDG_CONFIG_HOME`, appending its own `mayara/` below this.
+ */
+const MAYARA_CONFIG_HOME = `${DATA_MOUNT}/mayara-config`
+
+/**
  * Sensible default resource limits for the mayara-server container.
  * Tested on a Pi 5 8GB with a Garmin xHD2 radar at 24 NM range.
  *
@@ -784,7 +806,7 @@ export default function (app: MayaraServerAPI): Plugin {
     const cachedToken = userOverridesNav ? undefined : readCachedToken(dataDir)
 
     const injected: string[] = []
-    const env: Record<string, string> = {}
+    const env: Record<string, string> = { XDG_CONFIG_HOME: MAYARA_CONFIG_HOME }
     // Answers mayara's own "how did you reach the boat?" telemetry question:
     // this is the value its docs reserve for deployments through this
     // plugin, distinct from `container` (the standalone image) or a bare
@@ -851,10 +873,10 @@ export default function (app: MayaraServerAPI): Plugin {
       // (e.g. `mayaraVersion: '0.4.2'`) are unaffected — the floating
       // classifier skips them, making this a true no-op for pinned
       // deployments.
-      autoUpdateOnFloatingTag: true
+      autoUpdateOnFloatingTag: true,
+      signalkDataMount: DATA_MOUNT,
+      env
     }
-    // Always set now: MAYARA_DEPLOYMENT above guarantees env is non-empty.
-    config.env = env
     return config
   }
 

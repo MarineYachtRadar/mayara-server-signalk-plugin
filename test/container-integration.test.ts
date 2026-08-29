@@ -416,6 +416,21 @@ describe('mayara-server-signalk-plugin container integration', () => {
       await plugin.stop()
     })
 
+    // Regression: without a mount, mayara's settings.json lives in the
+    // container's writable layer, so every recreate (auto-update on the
+    // floating tag, token refresh, command change) wipes the user's radar
+    // names, guard zones and exclusion zones.
+    it('keeps mayara config on the plugin data dir so a recreate cannot wipe it', async () => {
+      const { containers, plugin } = await loadPlugin()
+      const { config } = containers._calls.ensureRunning[0]
+
+      expect(config.signalkDataMount).toBe('/skdata')
+      // Below the mount, not on it: the data dir also holds the SK device
+      // token and the cached GitHub token.
+      expect(config.env?.XDG_CONFIG_HOME).toBe('/skdata/mayara-config')
+      await plugin.stop()
+    })
+
     it('passes the default resource limits', async () => {
       const { containers, plugin } = await loadPlugin()
       expect(containers._calls.ensureRunning.length).toBe(1)
@@ -1113,6 +1128,7 @@ describe('mayara-server-signalk-plugin container integration', () => {
       const navIdx = command.indexOf('-n')
       expect(command[navIdx + 1]).toMatch(/^ws:127\.0\.0\.1:\d+$/)
       expect(config.env).toEqual({
+        XDG_CONFIG_HOME: '/skdata/mayara-config',
         MAYARA_DEPLOYMENT: 'signalk-server-plugin',
         MAYARA_TELEMETRY: 'true',
         MAYARA_SIGNALK_TOKEN: 'cached-jwt-abc'
@@ -1142,6 +1158,7 @@ describe('mayara-server-signalk-plugin container integration', () => {
       expect(command[navIdx + 1]).toBe('wss:127.0.0.1:8443')
       expect(command).toContain('--accept-invalid-certs')
       expect(config.env).toEqual({
+        XDG_CONFIG_HOME: '/skdata/mayara-config',
         MAYARA_DEPLOYMENT: 'signalk-server-plugin',
         MAYARA_TELEMETRY: 'true',
         MAYARA_SIGNALK_TOKEN: 'cached-jwt-abc'
