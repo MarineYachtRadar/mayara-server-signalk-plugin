@@ -681,6 +681,11 @@ export default function (app) {
         const cachedToken = userOverridesNav ? undefined : readCachedToken(dataDir);
         const injected = [];
         const env = {};
+        // Answers mayara's own "how did you reach the boat?" telemetry question:
+        // this is the value its docs reserve for deployments through this
+        // plugin, distinct from `container` (the standalone image) or a bare
+        // `standalone`/`embedded` guess.
+        env.MAYARA_DEPLOYMENT = 'signalk-server-plugin';
         if (!userOverridesNav) {
             if (cachedToken !== undefined) {
                 // Derive the scheme + port from the live Signal K server config
@@ -737,9 +742,8 @@ export default function (app) {
             // deployments.
             autoUpdateOnFloatingTag: true
         };
-        if (Object.keys(env).length > 0) {
-            config.env = env;
-        }
+        // Always set now: MAYARA_DEPLOYMENT above guarantees env is non-empty.
+        config.env = env;
         return config;
     }
     async function ensureSignalkToken(containers, tag, isCancelled = () => false) {
