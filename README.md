@@ -64,7 +64,7 @@ With **signalk-container** installed, the plugin automatically pulls and manages
 - **Check** — queries signalk-container's centralized update detection service. Auto-detects whether the running tag is semver (compare via GitHub releases) or floating like `latest`/`main` (compare local digest to remote). Offline-tolerant: if the boat is at sea, returns the last cached result rather than failing.
 - **Update** — pulls the selected version, recreates the container, and reapplies the resource limits (see below).
 - **Arguments** (advanced) — optional CLI args like `--brand furuno --interface eth0`
-- **Radar settings survive updates** — mayara's own configuration (the name you gave a radar, its guard zones, exclusion zones, range units) is stored on the plugin's data directory, at `~/.signalk/plugin-config-data/mayara-server-signalk-plugin/mayara-config/mayara/`, rather than inside the container. Recreating the container — for an update, or after a settings change — leaves it untouched.
+- **Radar settings survive updates** — mayara's own configuration (the name you gave a radar, its guard zones, exclusion zones, range units) is stored on the Signal K host at `~/.signalk/plugin-config-data/signalk-container/mayara-config/mayara/`, rather than inside the container. Recreating the container — for an update, or after a settings change — leaves it untouched.
 
 Without arguments, mayara-server auto-discovers all radar brands on all network interfaces.
 

@@ -44,9 +44,14 @@ const PLUGIN_ID = 'mayara-server-signalk-plugin'
 const GUI_PROXY_PATH = `/plugins/${PLUGIN_ID}/gui`
 
 /**
- * Where the plugin's Signal K data dir is mounted inside the container.
- * signalk-container resolves the host-side source itself, so this works
- * whether Signal K runs bare-metal or in its own container.
+ * Where `signalkDataMount` lands inside the container. signalk-container
+ * resolves the host-side source itself, so this works whether Signal K runs
+ * bare-metal or in its own container.
+ *
+ * What arrives is signalk-container's *own* plugin data dir, not ours --
+ * `plugin-config-data/signalk-container/`, holding its manifests and caches
+ * -- despite the field being documented as the calling plugin's
+ * `app.getDataDirPath()`. Confirmed on a live Pi.
  */
 const DATA_MOUNT = '/skdata'
 
@@ -58,10 +63,12 @@ const DATA_MOUNT = '/skdata'
  * floating tag, a token refresh, any command change) silently resets the
  * user's radar setup.
  *
- * A subdirectory rather than `DATA_MOUNT` itself: the data dir also holds
- * our Signal K device token and cached GitHub token, which mayara has no
- * business sharing a directory with. mayara's `directories` crate honours
- * `XDG_CONFIG_HOME`, appending its own `mayara/` below this.
+ * A subdirectory rather than `DATA_MOUNT` itself, because that directory
+ * belongs to signalk-container and is shared with every container it
+ * manages. Our own secrets are not at risk either way: the Signal K device
+ * token and cached GitHub token live in this plugin's data dir, which is
+ * never mounted. mayara's `directories` crate honours `XDG_CONFIG_HOME`,
+ * appending its own `mayara/` below this.
  */
 const MAYARA_CONFIG_HOME = `${DATA_MOUNT}/mayara-config`
 
