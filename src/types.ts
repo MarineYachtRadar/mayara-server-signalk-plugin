@@ -1,7 +1,8 @@
 import { ServerAPI } from '@signalk/server-api'
 
-interface BinaryStreamManager {
+export interface BinaryStreamManager {
   emitData(streamId: string, data: Buffer): void
+  // Absent on servers older than 2.31; those get the spoke stream held open.
   getClientCount?(streamId: string): number
 }
 

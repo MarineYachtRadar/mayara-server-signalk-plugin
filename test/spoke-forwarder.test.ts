@@ -145,6 +145,36 @@ describe('SpokeForwarder', () => {
       forwarder.stop()
     })
 
+    it('drops a pending reconnect when the subscribers leave first', async () => {
+      const port = await createWsServer()
+      let clients = 1
+      const manager = { emitData: vi.fn(), getClientCount: () => clients }
+      const upstream: WebSocket[] = []
+      wss?.on('connection', (ws) => upstream.push(ws))
+
+      const forwarder = new SpokeForwarder({
+        radarId: 'radar-0',
+        url: `ws://localhost:${port}`,
+        binaryStreamManager: manager,
+        watchInterval: 20,
+        reconnectInterval: 200
+      })
+
+      forwarder.start()
+      await new Promise((resolve) => setTimeout(resolve, 80))
+      expect(upstream).toHaveLength(1)
+
+      // Upstream drops, a reconnect is pending; the last subscriber leaves
+      // before it fires.
+      upstream[0].close()
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      clients = 0
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      expect(upstream).toHaveLength(1)
+
+      forwarder.stop()
+    })
+
     it('reconnects after an upstream drop only while still subscribed', async () => {
       const port = await createWsServer()
       let clients = 1

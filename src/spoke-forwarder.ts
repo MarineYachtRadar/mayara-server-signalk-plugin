@@ -1,10 +1,5 @@
 import WebSocket from 'ws'
-
-interface BinaryStreamManager {
-  emitData(streamId: string, data: Buffer): void
-  // Absent on servers older than 2.31; those get the stream held open.
-  getClientCount?(streamId: string): number
-}
+import type { BinaryStreamManager } from './types.js'
 
 export interface SpokeForwarderOptions {
   radarId: string
@@ -65,8 +60,10 @@ export class SpokeForwarder {
   private watch(): void {
     if (this.closed) return
     if (this.watched()) {
-      if (!this.ws) this.connect()
-    } else if (this.ws) {
+      // A pending reconnect keeps its backoff; the watch only opens the
+      // stream for a new first subscriber.
+      if (!this.ws && !this.reconnectTimer) this.connect()
+    } else if (this.ws || this.reconnectTimer) {
       this.debug(`No subscribers for ${this.radarId}, closing spoke stream`)
       this.disconnect()
     }
@@ -83,7 +80,8 @@ export class SpokeForwarder {
       try {
         ws.close()
       } catch {
-        // Ignore close errors
+        // Closing a socket that never finished connecting is the only way
+        // this throws, and there is nothing left to release then.
       }
     }
     this.connected = false
@@ -149,7 +147,7 @@ export class SpokeForwarder {
 
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
-      if (!this.closed) {
+      if (!this.closed && this.watched()) {
         this.connect()
       }
     }, this.reconnectMs)
