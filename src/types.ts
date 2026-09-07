@@ -2,6 +2,7 @@ import { ServerAPI } from '@signalk/server-api'
 
 interface BinaryStreamManager {
   emitData(streamId: string, data: Buffer): void
+  getClientCount?(streamId: string): number
 }
 
 export interface MayaraServerAPI extends ServerAPI {

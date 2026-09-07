@@ -2,6 +2,8 @@ import WebSocket from 'ws'
 
 interface BinaryStreamManager {
   emitData(streamId: string, data: Buffer): void
+  // Absent on servers older than 2.31; those get the stream held open.
+  getClientCount?(streamId: string): number
 }
 
 export interface SpokeForwarderOptions {
@@ -10,7 +12,11 @@ export interface SpokeForwarderOptions {
   binaryStreamManager: BinaryStreamManager
   debug?: (msg: string) => void
   reconnectInterval?: number
+  /** How often to check whether anyone is subscribed downstream. */
+  watchInterval?: number
 }
+
+const DEFAULT_WATCH_INTERVAL_MS = 1000
 
 export class SpokeForwarder {
   private radarId: string
@@ -21,6 +27,8 @@ export class SpokeForwarder {
 
   private ws: WebSocket | null = null
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private watchTimer: ReturnType<typeof setInterval> | null = null
+  private watchMs: number
   private closed = false
   private connected = false
   private streamId: string
@@ -31,28 +39,71 @@ export class SpokeForwarder {
     this.binaryStreamManager = options.binaryStreamManager
     this.debug = options.debug ?? (() => {})
     this.reconnectMs = options.reconnectInterval ?? 5000
+    this.watchMs = options.watchInterval ?? DEFAULT_WATCH_INTERVAL_MS
     this.streamId = `radars/${options.radarId}`
   }
 
+  // mayara counts every spoke subscriber as someone watching the radar and
+  // keeps it transmitting for them, so the upstream stream is only held
+  // while a Signal K client is actually subscribed to ours.
   start(): void {
     if (this.closed) return
-    this.connect()
+    if (!this.binaryStreamManager.getClientCount) {
+      this.connect()
+      return
+    }
+    this.watch()
+    this.watchTimer = setInterval(() => {
+      this.watch()
+    }, this.watchMs)
+  }
+
+  private watched(): boolean {
+    return (this.binaryStreamManager.getClientCount?.(this.streamId) ?? 1) > 0
+  }
+
+  private watch(): void {
+    if (this.closed) return
+    if (this.watched()) {
+      if (!this.ws) this.connect()
+    } else if (this.ws) {
+      this.debug(`No subscribers for ${this.radarId}, closing spoke stream`)
+      this.disconnect()
+    }
+  }
+
+  private disconnect(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
+    if (this.ws) {
+      const ws = this.ws
+      this.ws = null
+      try {
+        ws.close()
+      } catch {
+        // Ignore close errors
+      }
+    }
+    this.connected = false
   }
 
   private connect(): void {
-    if (this.closed) return
+    if (this.closed || this.ws) return
 
     this.debug(`Connecting to spoke stream: ${this.url}`)
 
     try {
-      this.ws = new WebSocket(this.url)
+      const ws = new WebSocket(this.url)
+      this.ws = ws
 
-      this.ws.on('open', () => {
+      ws.on('open', () => {
         this.connected = true
         this.debug(`Connected to spoke stream for ${this.radarId}`)
       })
 
-      this.ws.on('message', (data: WebSocket.RawData) => {
+      ws.on('message', (data: WebSocket.RawData) => {
         let buf: Buffer
         if (Buffer.isBuffer(data)) {
           buf = data
@@ -68,18 +119,20 @@ export class SpokeForwarder {
         }
       })
 
-      this.ws.on('error', (err: Error) => {
+      ws.on('error', (err: Error) => {
         this.connected = false
         this.debug(`Spoke stream error for ${this.radarId}: ${err.message}`)
       })
 
-      this.ws.on('close', (code: number) => {
-        this.connected = false
+      ws.on('close', (code: number) => {
         this.debug(`Spoke stream closed for ${this.radarId}: ${code}`)
 
-        if (!this.closed) {
-          this.scheduleReconnect()
-        }
+        // A close we asked for has already let go of this socket; only an
+        // upstream drop while still watched is worth retrying.
+        if (this.ws !== ws) return
+        this.ws = null
+        this.connected = false
+        if (!this.closed && this.watched()) this.scheduleReconnect()
       })
     } catch (err) {
       this.debug(
@@ -109,21 +162,11 @@ export class SpokeForwarder {
   stop(): void {
     this.closed = true
 
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer)
-      this.reconnectTimer = null
+    if (this.watchTimer) {
+      clearInterval(this.watchTimer)
+      this.watchTimer = null
     }
-
-    if (this.ws) {
-      try {
-        this.ws.close()
-      } catch {
-        // Ignore close errors
-      }
-      this.ws = null
-    }
-
-    this.connected = false
+    this.disconnect()
     this.debug(`Stopped spoke forwarder for ${this.radarId}`)
   }
 }
