@@ -1181,6 +1181,31 @@ export default function (app) {
             }
         }
     }
+    // Tell the server a control path never goes stale.
+    //
+    // `setDefaultMetadata(path, { timeout: 0 })` is the supported way for a
+    // plugin to declare stale-data behaviour for the paths it publishes
+    // (SignalK/signalk-server#3025); `0` disables enforcement for the path.
+    // Metadata attached to individual deltas is NOT consulted when the server
+    // resolves a timeout, so this has to be a separate call — putting it on
+    // every forwarded delta would add traffic and change nothing.
+    //
+    // A value the user has set for the path in the Data Browser wins over this,
+    // which is intended: the plugin is stating a default, not overriding an
+    // operator who decided otherwise.
+    //
+    // Best-effort. A server too old to know the method, or one that rejects the
+    // write, leaves the path on the 60 s default — the pre-existing behaviour,
+    // not a new failure — so this must never abort registration of the PUT
+    // handler that follows it.
+    async function declareControlNotStale(path) {
+        try {
+            await app.setDefaultMetadata(path, { timeout: 0 });
+        }
+        catch (err) {
+            app.debug(`Could not declare ${path} exempt from staleness: ${errMsg(err)}`);
+        }
+    }
     // Register a Signal K PUT handler for every control mayara reports on a radar,
     // at path radars.<id>.controls.<control>. Each handler forwards the put value
     // verbatim to mayara's control PUT (the same call the Radar API's REST
@@ -1188,6 +1213,14 @@ export default function (app) {
     // change it. Read-only controls (modelName, firmwareVersion, …) get a handler
     // too, but mayara rejects the write. Registration is idempotent on rediscovery
     // because the source (PLUGIN_ID) key overwrites.
+    //
+    // Each control also gets `timeout: 0` metadata, exempting it from the
+    // server's stale-data enforcement. A control is a setting, not a
+    // measurement: mayara emits it once when it changes and then stays quiet,
+    // so under the 60 s default every control on an idle radar was blanked to
+    // null a minute after the last change — the radar's actual range, gain and
+    // autoStandby state disappeared from the Data Browser and from any client
+    // reading them off the stream, while the radar was working normally.
     async function registerControlPutHandlers(radarId) {
         if (!client)
             return;
@@ -1196,6 +1229,7 @@ export default function (app) {
             const controlIds = Object.keys(controls);
             for (const controlId of controlIds) {
                 const path = `radars.${radarId}.controls.${controlId}`;
+                await declareControlNotStale(path);
                 app.registerPutHandler('vessels.self', path, (_context, _path, value, cb) => {
                     if (!client)
                         return { state: 'FAILED', statusCode: 503 };
