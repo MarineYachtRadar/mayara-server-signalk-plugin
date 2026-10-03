@@ -26,6 +26,12 @@ import {
   type OwnNavigation
 } from './collision/radar-targets.js'
 import {
+  TargetContactReporter,
+  radarAlarmPreset,
+  targetsApiOf,
+  type TargetsApiHost
+} from './collision/target-contacts.js'
+import {
   ContainerConfig,
   ContainerManagerApi,
   ContainerResourceLimits,
@@ -143,6 +149,7 @@ export default function (app: MayaraServerAPI): Plugin {
   // how many radars are discovered.
   let deltaForwarder: DeltaForwarder | null = null
   let collisionMonitor: RadarCollisionMonitor | null = null
+  let contactReporter: TargetContactReporter | null = null
   let collisionExpiryTimer: ReturnType<typeof setInterval> | null = null
   let discoveryInterval: ReturnType<typeof setInterval> | null = null
   // Monotonic generation for the token-acquisition loop. Bumped on every
@@ -232,6 +239,10 @@ export default function (app: MayaraServerAPI): Plugin {
       if (collisionMonitor) {
         collisionMonitor.stop()
         collisionMonitor = null
+      }
+      if (contactReporter) {
+        contactReporter.stop()
+        contactReporter = null
       }
 
       if (client) {
@@ -1249,9 +1260,24 @@ export default function (app: MayaraServerAPI): Plugin {
     // upstream Signal K server. The forwarder owns its own reconnect
     // loop, so failing here just means it'll reach mayara on a later
     // attempt.
-    const collisionPreset = settings.collisionAlerts ?? SCHEMA_DEFAULTS.collisionAlerts
+    // On a server with the Targets API, radar targets are always reported
+    // there so the server can link them to their AIS vessels. Radar alarms
+    // stay here unless the user hands them to the collision alerts plugin:
+    // that plugin may not be installed, and a missing alarm is worse than a
+    // duplicate one.
+    const targetsApi = targetsApiOf(app as unknown as TargetsApiHost)
+    if (targetsApi && !contactReporter) {
+      contactReporter = new TargetContactReporter(targetsApi, {
+        selfContext: app.selfContext,
+        maxAge: RADAR_TARGET_MAX_AGE_MS
+      })
+    }
+    const collisionPreset = radarAlarmPreset(
+      settings.collisionAlerts ?? SCHEMA_DEFAULTS.collisionAlerts,
+      targetsApi !== null
+    )
     if (collisionPreset !== 'off' && !collisionMonitor) {
-      const monitor = new RadarCollisionMonitor(
+      collisionMonitor = new RadarCollisionMonitor(
         {
           zones: PRESETS[collisionPreset],
           maxAge: RADAR_TARGET_MAX_AGE_MS,
@@ -1265,9 +1291,11 @@ export default function (app: MayaraServerAPI): Plugin {
         },
         createAlarmSink(app)
       )
-      collisionMonitor = monitor
+    }
+    if ((collisionMonitor || contactReporter) && !collisionExpiryTimer) {
       collisionExpiryTimer = setInterval(() => {
-        monitor.expire()
+        collisionMonitor?.expire()
+        contactReporter?.expire()
       }, RADAR_TARGET_EXPIRY_INTERVAL_MS)
     }
 
@@ -1288,6 +1316,7 @@ export default function (app: MayaraServerAPI): Plugin {
         debug: app.debug.bind(app),
         onValue: (path, value) => {
           collisionMonitor?.update(path, value)
+          contactReporter?.update(path, value)
         },
         reconnectInterval: (settings.reconnectInterval || 5) * 1000
       })
