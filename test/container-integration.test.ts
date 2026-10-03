@@ -1432,7 +1432,7 @@ describe('mayara-server-signalk-plugin container integration', () => {
           })
       )
 
-      const { plugin, app } = await loadPlugin({
+      const { plugin } = await loadPlugin({
         requestSignalkToken: true,
         reconnectInterval: 0.01
       })
@@ -1456,7 +1456,6 @@ describe('mayara-server-signalk-plugin container integration', () => {
 
       // The superseded loop exited rather than looping into more POSTs.
       expect(vi.mocked(tokenModule.beginTokenRequest).mock.calls.length).toBe(callsAfterRestart)
-      void app
       await plugin.stop()
     })
   })
