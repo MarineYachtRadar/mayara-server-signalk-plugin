@@ -155,6 +155,48 @@ describe('DeltaForwarder', () => {
     expect(forwarded.updates[0].values[0].path).toBe('notifications.radar.r1.guardZone.1')
   })
 
+  it('hands each relayed value to onValue after forwarding it', async () => {
+    const port = await createWsServer()
+    const app = makeApp()
+    const onValue = vi.fn()
+
+    const clientConnected = new Promise<WebSocket>((resolve) => {
+      wss?.on('connection', resolve)
+    })
+
+    const forwarder = new DeltaForwarder(app, {
+      pluginId: 'test-plugin',
+      url: `ws://localhost:${port}`,
+      pathPrefixes: ['radars.'],
+      onValue,
+      reconnectInterval: 100
+    })
+    forwarder.start()
+
+    const ws = await clientConnected
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    ws.send(
+      JSON.stringify({
+        updates: [
+          {
+            values: [
+              { path: 'navigation.headingTrue', value: 1.2 },
+              { path: 'radars.nav1.targets.7', value: { id: 7 } }
+            ]
+          }
+        ]
+      })
+    )
+
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    expect(app.handleMessage).toHaveBeenCalledTimes(1)
+    expect(onValue.mock.calls).toEqual([['radars.nav1.targets.7', { id: 7 }]])
+
+    forwarder.stop()
+  })
+
   it('ignores deltas that carry no notification paths', async () => {
     const port = await createWsServer()
     const app = makeApp()

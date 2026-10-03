@@ -18,6 +18,13 @@ import { rewriteGuiProxyPath } from './gui-proxy-path.js'
 import { createRadarProvider } from './radar-provider.js'
 import { SpokeForwarder } from './spoke-forwarder.js'
 import { DeltaForwarder } from './delta-forwarder.js'
+import { DeltaAlarmSink, ManagedAlarmSink, type AlarmSink } from './collision/alarms.js'
+import { PRESETS } from './collision/zones.js'
+import {
+  RadarCollisionMonitor,
+  ownShipFrom,
+  type OwnNavigation
+} from './collision/radar-targets.js'
 import {
   ContainerConfig,
   ContainerManagerApi,
@@ -38,6 +45,12 @@ import {
 const MAYARA_IMAGE = 'ghcr.io/marineyachtradar/mayara-server'
 const CONTAINER_NAME = 'mayara-server'
 const PLUGIN_ID = 'mayara-server-signalk-plugin'
+// mayara reports every ARPA target once per antenna revolution (a few
+// seconds), so a target silent for this long went away with its radar or
+// with mayara itself.
+const RADAR_TARGET_MAX_AGE_MS = 30_000
+const OWN_SHIP_MAX_AGE_MS = 30_000
+const RADAR_TARGET_EXPIRY_INTERVAL_MS = 5_000
 // Same-origin path the SK server forwards to mayara-server's :6502.
 // Keeps the browser on the SK port (3000 / 443), so HTTPS works and
 // only one firewall port needs to be open.
@@ -108,6 +121,19 @@ function getContainerManager(): ContainerManagerApi | undefined {
   return helperGetContainerManager()
 }
 
+function createAlarmSink(app: MayaraServerAPI): AlarmSink {
+  try {
+    // getId throws NotificationManagerDisabledError when the server leaves
+    // notifications unmanaged (and TypeError on a server without the API);
+    // ack/silence then don't exist, so fall back to plain deltas.
+    app.notifications.getId('probe' as Parameters<MayaraServerAPI['notifications']['getId']>[0])
+    return new ManagedAlarmSink(app)
+  } catch {
+    app.debug('Notification management unavailable, publishing notification deltas')
+    return new DeltaAlarmSink(app, PLUGIN_ID)
+  }
+}
+
 export default function (app: MayaraServerAPI): Plugin {
   let client: MayaraClient | null = null
   let currentSettings: Partial<Config> | null = null
@@ -116,6 +142,8 @@ export default function (app: MayaraServerAPI): Plugin {
   // stream, not per-radar, so we only need one connection regardless of
   // how many radars are discovered.
   let deltaForwarder: DeltaForwarder | null = null
+  let collisionMonitor: RadarCollisionMonitor | null = null
+  let collisionExpiryTimer: ReturnType<typeof setInterval> | null = null
   let discoveryInterval: ReturnType<typeof setInterval> | null = null
   // Monotonic generation for the token-acquisition loop. Bumped on every
   // start() and stop(); each recovery loop captures the value at launch and
@@ -195,6 +223,15 @@ export default function (app: MayaraServerAPI): Plugin {
       if (deltaForwarder) {
         deltaForwarder.stop()
         deltaForwarder = null
+      }
+
+      if (collisionExpiryTimer) {
+        clearInterval(collisionExpiryTimer)
+        collisionExpiryTimer = null
+      }
+      if (collisionMonitor) {
+        collisionMonitor.stop()
+        collisionMonitor = null
       }
 
       if (client) {
@@ -1212,6 +1249,28 @@ export default function (app: MayaraServerAPI): Plugin {
     // upstream Signal K server. The forwarder owns its own reconnect
     // loop, so failing here just means it'll reach mayara on a later
     // attempt.
+    const collisionPreset = settings.collisionAlerts ?? SCHEMA_DEFAULTS.collisionAlerts
+    if (collisionPreset !== 'off' && !collisionMonitor) {
+      const monitor = new RadarCollisionMonitor(
+        {
+          zones: PRESETS[collisionPreset],
+          maxAge: RADAR_TARGET_MAX_AGE_MS,
+          selfContext: app.selfContext,
+          ownShip: () =>
+            ownShipFrom(
+              app.getSelfPath('navigation') as OwnNavigation | undefined,
+              Date.now(),
+              OWN_SHIP_MAX_AGE_MS
+            )
+        },
+        createAlarmSink(app)
+      )
+      collisionMonitor = monitor
+      collisionExpiryTimer = setInterval(() => {
+        monitor.expire()
+      }, RADAR_TARGET_EXPIRY_INTERVAL_MS)
+    }
+
     if (!deltaForwarder) {
       deltaForwarder = new DeltaForwarder(app, {
         pluginId: PLUGIN_ID,
@@ -1227,6 +1286,9 @@ export default function (app: MayaraServerAPI): Plugin {
         ],
         pathPrefixes: ['notifications.', 'radars.'],
         debug: app.debug.bind(app),
+        onValue: (path, value) => {
+          collisionMonitor?.update(path, value)
+        },
         reconnectInterval: (settings.reconnectInterval || 5) * 1000
       })
       deltaForwarder.start()
