@@ -5,8 +5,10 @@
 # Dependencies; ci, test, chore, refactor, style and dev dependency bumps
 # stay out of the notes. A breaking change -- `!` after the type, or a
 # `BREAKING CHANGE:` line in the description, which becomes the squash
-# commit's body -- goes under Breaking whatever its type. Any other type
-# (docs, which ships in the package's README) lands under Other.
+# commit's body -- goes under Breaking whatever its type. GitHub's own
+# `Revert "..."` title counts as revert. Any other type (docs, which ships
+# in the package's README, or a build change other than a dependency bump)
+# lands under Other.
 #
 # pull_request_target so that a pull request from a fork is labelled too.
 # Only the title and description are read, with no checkout and nothing from
@@ -54,6 +56,8 @@ jobs:
           type=""; scope=""; bang=""
           if [[ "$TITLE" =~ $conventional ]]; then
             type="${BASH_REMATCH[1]}"; scope="${BASH_REMATCH[3]}"; bang="${BASH_REMATCH[4]}"
+          elif [[ "$TITLE" == 'Revert "'* ]]; then
+            type=revert
           fi
           case "$type" in
             feat|perf) wanted=enhancement ;;

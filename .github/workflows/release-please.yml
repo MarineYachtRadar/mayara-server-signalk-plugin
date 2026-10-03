@@ -70,7 +70,7 @@ jobs:
             MESSAGES=$(git log -z --format=%B "$last..HEAD" | jq -Rs 'split("\u0000") | map(select(. != ""))')
             echo "Judging the $(jq length <<< "$MESSAGES") commits since $last."
           fi
-          if jq -e --arg re "$RELEASABLE" '(length >= 2048) or ([.[] | (split("\n")[0] | test($re)) or test("\nBREAKING[- ]CHANGE: ") or test("\nRelease-As: ")] | any)' <<< "$MESSAGES" > /dev/null; then
+          if jq -e --arg re "$RELEASABLE" '(length >= 2048) or ([.[] | (split("\n")[0] | test($re)) or test("\nBREAKING[- ]CHANGE: ") or test("\nRelease-As: "; "i")] | any)' <<< "$MESSAGES" > /dev/null; then
             echo "releasable=true" >> "$GITHUB_OUTPUT"
           else
             echo "releasable=false" >> "$GITHUB_OUTPUT"

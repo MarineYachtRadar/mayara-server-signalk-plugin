@@ -134,7 +134,7 @@ release-please (`.github/workflows/release-please.yml`) cuts releases. **Never b
 
 To force a version, merge a commit with a `Release-As: X.Y.Z` footer. To refresh the release PR after changing `release-please-config.json` or `.github/release.yml`, run the release-please workflow by hand (Actions → release-please → Run workflow). Pre-releases (`-beta.N` / `-rc.N`) are still tagged by hand from a branch: bump `package.json` there, then push the tag, which starts `publish.yml` directly and publishes under npm's `beta` dist-tag.
 
-Release notes are grouped by label (`.github/release.yml`). `label-by-title.yml` sets the label from the PR title, so a PR's title type is what places it: `feat`/`perf` → Features, `fix`/`revert` → Fixes, `build(deps)` → Dependencies, `docs` and untyped → Other, and `ci`/`test`/`chore`/`refactor`/`style`/`build(deps-dev)` are left out.
+Release notes are grouped by label (`.github/release.yml`). `label-by-title.yml` sets the label from the PR title, so a PR's title type is what places it: `feat`/`perf` → Features, `fix`/`revert` (and GitHub's `Revert "…"` titles) → Fixes, `build(deps)` → Dependencies, `docs`, other `build` scopes and untyped → Other, and `ci`/`test`/`chore`/`refactor`/`style`/`build(deps-dev)` are left out.
 
 ### Branch naming
 
