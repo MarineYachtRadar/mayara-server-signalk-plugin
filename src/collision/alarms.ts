@@ -98,6 +98,11 @@ export class ManagedAlarmSink implements AlarmSink {
         this.active.set(targetId, { id: existing.id, level: alert.level, sentAt: now })
         return
       } catch {
+        // Raising again while the old notification still stands would leave
+        // two alarms for one target; keep it and retry the update next time.
+        if (this.app.notifications.getId(existing.id)) {
+          return
+        }
         // The notification was removed behind our back (cleared and
         // cleaned up by the server); the risk still exists, so raise anew.
       }

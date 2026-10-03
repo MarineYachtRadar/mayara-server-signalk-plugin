@@ -37,6 +37,7 @@ function fakeApp() {
   const notifications = {
     raise: vi.fn<NotificationsApi['raise']>(() => 'n1' as NotificationId),
     update: vi.fn<NotificationsApi['update']>(),
+    getId: vi.fn<NotificationsApi['getId']>(() => undefined),
     clear: vi.fn<NotificationsApi['clear']>()
   }
   const handleMessage = vi.fn<HandleMessage>()
@@ -84,6 +85,18 @@ describe('ManagedAlarmSink', () => {
     sink.set(ID, alert('warn'))
     sink.set(ID, alert('alarm'))
     expect(notifications.raise).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not raise a second alarm while a failed update leaves the first standing', () => {
+    const { app, notifications } = fakeApp()
+    notifications.update.mockImplementation(() => {
+      throw new Error('Notification options not supplied!')
+    })
+    notifications.getId.mockReturnValue({} as ReturnType<NotificationsApi['getId']>)
+    const sink = new ManagedAlarmSink(app, () => 0)
+    sink.set(ID, alert('warn'))
+    sink.set(ID, alert('alarm'))
+    expect(notifications.raise).toHaveBeenCalledOnce()
   })
 
   it('clears on release and on clearAll', () => {
