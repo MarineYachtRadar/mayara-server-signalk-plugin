@@ -86,7 +86,7 @@ export class MayaraClient {
         return this.request('GET', `${API_BASE}/${radarId}/targets`);
     }
     async acquireTarget(radarId, bearing, distance) {
-        return (await this.request('POST', `${API_BASE}/${radarId}/targets/acquire`, {
+        return (await this.request('POST', `${API_BASE}/${radarId}/targets`, {
             bearing,
             distance
         }));
