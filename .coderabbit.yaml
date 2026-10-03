@@ -13,8 +13,9 @@ reviews:
     # explicit skip markers are author opt-outs.
     ignore_title_keywords:
       - 'chore(release):'
-      - 'chore(deps):'
-      - 'chore(deps-dev):'
+      - 'build(deps):'
+      - 'build(deps-dev):'
+      - 'ci(deps):'
       - '[skip review]'
       - 'WIP'
     ignore_usernames:
