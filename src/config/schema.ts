@@ -71,6 +71,25 @@ export const ConfigSchema = Type.Object({
     maximum: 30
   }),
 
+  collisionAlerts: Type.Union(
+    [
+      Type.Literal('off'),
+      Type.Literal('harbour'),
+      Type.Literal('coastal'),
+      Type.Literal('offshore')
+    ],
+    {
+      default: 'coastal',
+      title: 'Collision alarms for radar (ARPA) targets',
+      description:
+        'Raise a collision alarm for each tracked radar target whose closest ' +
+        'point of approach (CPA) comes too close too soon. Harbour: warn at ' +
+        '100 m / 5 min, alarm at 50 m / 2 min. Coastal: warn at 0.5 NM / 12 ' +
+        'min, alarm at 0.25 NM / 6 min. Offshore: warn at 1 NM / 20 min, alarm ' +
+        'at 0.5 NM / 10 min.'
+    }
+  ),
+
   telemetry: Type.Boolean({
     default: true,
     title: 'Report anonymous usage stats to the mayara developers',
@@ -103,5 +122,6 @@ export const SCHEMA_DEFAULTS: Config = {
   directGuiUrl: true,
   discoveryPollInterval: 10,
   reconnectInterval: 5,
+  collisionAlerts: 'coastal',
   telemetry: true
 }

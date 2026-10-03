@@ -36,6 +36,11 @@ export interface DeltaForwarderOptions {
   pathPrefixes?: string[]
   /** Optional logger; defaults to a no-op. */
   debug?: (msg: string) => void
+  /**
+   * Called with every relayed value after it has been forwarded, so the
+   * plugin can act on mayara's data (radar collision alarms) as it arrives.
+   */
+  onValue?: (path: string, value: unknown) => void
   reconnectInterval?: number
   /**
    * Constructor override used by tests; in production this is just the
@@ -70,6 +75,7 @@ export class DeltaForwarder {
   private readonly subscriptions: Array<{ path: string; policy: string }>
   private readonly pathPrefixes: string[]
   private readonly debug: (msg: string) => void
+  private readonly onValue: ((path: string, value: unknown) => void) | undefined
   private readonly reconnectMs: number
   private readonly webSocketFactory: (url: string) => WebSocketLike
 
@@ -86,6 +92,7 @@ export class DeltaForwarder {
     this.subscriptions = options.subscriptions ?? [{ path: 'notifications.*', policy: 'instant' }]
     this.pathPrefixes = options.pathPrefixes ?? ['notifications.']
     this.debug = options.debug ?? (() => {})
+    this.onValue = options.onValue
     this.reconnectMs = options.reconnectInterval ?? 5000
     this.webSocketFactory =
       options.webSocketFactory ?? ((url: string): WebSocketLike => new WebSocket(url))
@@ -180,6 +187,20 @@ export class DeltaForwarder {
       this.app.handleMessage(this.pluginId, delta)
     } catch (err) {
       this.debug(`Failed to forward delta: ${err instanceof Error ? err.message : String(err)}`)
+    }
+
+    if (!this.onValue) return
+    for (const update of delta.updates ?? []) {
+      if (!('values' in update)) continue
+      for (const { path, value } of update.values) {
+        try {
+          this.onValue(path, value)
+        } catch (err) {
+          this.debug(
+            `onValue failed for ${path}: ${err instanceof Error ? err.message : String(err)}`
+          )
+        }
+      }
     }
   }
 

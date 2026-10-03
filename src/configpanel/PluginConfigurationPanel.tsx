@@ -13,7 +13,21 @@ interface PanelConfig {
   secure?: boolean
   discoveryPollInterval?: number
   reconnectInterval?: number
+  collisionAlerts?: CollisionPreset
   telemetry?: boolean
+}
+
+type CollisionPreset = 'off' | 'harbour' | 'coastal' | 'offshore'
+
+const COLLISION_PRESETS: Array<{ value: CollisionPreset; label: string }> = [
+  { value: 'off', label: 'Off' },
+  { value: 'harbour', label: 'Harbour: warn 100 m / 5 min, alarm 50 m / 2 min' },
+  { value: 'coastal', label: 'Coastal: warn 0.5 NM / 12 min, alarm 0.25 NM / 6 min' },
+  { value: 'offshore', label: 'Offshore: warn 1 NM / 20 min, alarm 0.5 NM / 10 min' }
+]
+
+function isCollisionPreset(value: string): value is CollisionPreset {
+  return COLLISION_PRESETS.some((p) => p.value === value)
 }
 
 /** Props the Signal K Admin UI passes to a federated config panel. */
@@ -405,6 +419,9 @@ export default function PluginConfigurationPanel({
   )
   const [reconnectInterval, setReconnectInterval] = useState(String(cfg.reconnectInterval ?? 5))
   const [telemetry, setTelemetry] = useState(cfg.telemetry !== false)
+  const [collisionAlerts, setCollisionAlerts] = useState<CollisionPreset>(
+    cfg.collisionAlerts ?? 'coastal'
+  )
 
   const [versions, setVersions] = useState<VersionEntry[]>([])
   const [versionsLoading, setVersionsLoading] = useState(false)
@@ -507,6 +524,7 @@ export default function PluginConfigurationPanel({
       secure,
       discoveryPollInterval: discoveryValue,
       reconnectInterval: reconnectValue,
+      collisionAlerts,
       telemetry
     })
     setActionStatus('Saved! Plugin will restart.')
@@ -891,6 +909,29 @@ export default function PluginConfigurationPanel({
           />
         </div>
       </CollapsibleSection>
+
+      <div style={S.sectionTitle}>Collision alarms</div>
+
+      <div style={S.fieldRow}>
+        <label style={S.label} htmlFor="mayara-collision-alerts">
+          Radar targets
+        </label>
+        <select
+          id="mayara-collision-alerts"
+          style={S.select}
+          value={collisionAlerts}
+          onChange={(e) => {
+            if (isCollisionPreset(e.target.value)) setCollisionAlerts(e.target.value)
+          }}
+        >
+          {COLLISION_PRESETS.map((p) => (
+            <option key={p.value} value={p.value}>
+              {p.label}
+            </option>
+          ))}
+        </select>
+        <span style={S.hint}>Alarm when a tracked target&apos;s CPA comes too close too soon</span>
+      </div>
 
       {/* Status */}
       {actionStatus && (

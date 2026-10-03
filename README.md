@@ -159,11 +159,29 @@ TLS and the radar session should be encrypted too.
 Note that upgrading from a version without this setting adopts the new default:
 installations that relied on the proxy need to disable it explicitly.
 
+### Collision Alarms
+
+Each ARPA target mayara tracks gets its own collision alarm when its closest
+point of approach (CPA) comes too close too soon. **Collision alarms → Radar
+targets** picks the sensitivity (harbour, coastal — the default — or offshore)
+or turns them off. The alarms use the same notification shape as
+[signalk-collision-alerts](https://github.com/dirkwa/signalk-collision-alerts)
+does for AIS, one per target at
+`notifications.navigation.closestApproach.radar:<radarId>:<targetId>`, so
+chart plotters can acknowledge them and draw the CPA line. CPA and time to CPA
+are mayara's own, so the alarm agrees with the radar display. This works the
+same whether the plugin runs mayara-server in a container or connects to one
+elsewhere.
+
+A ship seen by both AIS and radar alarms twice, once per sensor, until Signal K
+can tell that both contacts are the same ship.
+
 ## Features
 
 - **Container management**: Pull, update, and run mayara-server via signalk-container with sensible default resource limits
 - **Multi-radar support**: Auto-discovers all radars connected to mayara-server
 - **Full Radar API**: Power, range, gain, sea/rain clutter, ARPA targets
+- **Collision alarms**: One CPA/TCPA alarm per ARPA target, in the shared Signal K collision alarm shape
 - **Binary spoke streaming**: Forwards protobuf spoke data via SignalK's binaryStreamManager
 - **Auto-reconnection**: Handles disconnections with configurable retry
 - **Resilient Signal K authentication**: Requests a device token automatically, validates the cached token on start, and re-requests without a restart if it's denied, revoked, or expires
