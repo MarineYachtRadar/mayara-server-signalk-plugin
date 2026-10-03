@@ -74,6 +74,16 @@ describe('TargetContactReporter', () => {
     expect(updateTargetContact.mock.calls[0][0]).toMatchObject({ id: 'radar-0-7' })
   })
 
+  it('gives radars whose ids contain a dash distinct contact ids', () => {
+    const { reporter, updateTargetContact, removeTargetContact } = setup()
+    reporter.update('radars.a-1.targets.2', target())
+    reporter.update('radars.a.targets.1-2', target())
+    reporter.update('radars.a.targets.12', target({ status: 'lost' }))
+    expect(updateTargetContact).toHaveBeenCalledTimes(1)
+    expect(updateTargetContact.mock.calls[0][0]).toMatchObject({ id: 'a-1-2' })
+    expect(removeTargetContact).not.toHaveBeenCalled()
+  })
+
   it('withdraws a target mayara reports lost', () => {
     const { reporter, removeTargetContact } = setup()
     reporter.update('radars.radar-0.targets.7', target())

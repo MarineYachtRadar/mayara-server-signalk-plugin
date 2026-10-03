@@ -22,7 +22,9 @@ export interface TargetsApiHost {
   getTargets?: () => unknown[]
 }
 
-const TARGET_PATH = /^radars\.([^.]+)\.targets\.([^.]+)$/
+// mayara numbers its ARPA targets, so the last `-` of a contact id always
+// separates the radar id from the target number.
+const TARGET_PATH = /^radars\.([^.]+)\.targets\.(\d+)$/
 
 function isNumber(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v)
