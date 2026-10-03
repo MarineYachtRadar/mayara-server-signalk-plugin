@@ -41,7 +41,7 @@ function setup() {
 describe('toContact', () => {
   it('maps an ARPA target to a radar contact', () => {
     expect(toContact('radar-0', '7', target(), SELF)).toEqual({
-      id: 'radar-0:7',
+      id: 'radar-0-7',
       type: 'radar',
       position: { latitude: 52.0135, longitude: 4 },
       courseOverGroundTrue: Math.PI,
@@ -71,7 +71,7 @@ describe('TargetContactReporter', () => {
     reporter.update('radars.radar-0.controls.gain', { value: 50 })
     reporter.update('radars.radar-0.targets.7', target())
     expect(updateTargetContact).toHaveBeenCalledTimes(1)
-    expect(updateTargetContact.mock.calls[0][0]).toMatchObject({ id: 'radar-0:7' })
+    expect(updateTargetContact.mock.calls[0][0]).toMatchObject({ id: 'radar-0-7' })
   })
 
   it('withdraws a target mayara reports lost', () => {
@@ -80,7 +80,7 @@ describe('TargetContactReporter', () => {
     reporter.update('radars.radar-0.targets.7', null)
     reporter.update('radars.radar-0.targets.7', null)
     expect(removeTargetContact).toHaveBeenCalledTimes(1)
-    expect(removeTargetContact).toHaveBeenCalledWith('radar-0:7')
+    expect(removeTargetContact).toHaveBeenCalledWith('radar-0-7')
   })
 
   it('withdraws targets mayara stopped reporting', () => {
@@ -90,7 +90,7 @@ describe('TargetContactReporter', () => {
     reporter.update('radars.radar-0.targets.8', target())
     advanceClock(15_000)
     reporter.expire()
-    expect(removeTargetContact.mock.calls).toEqual([['radar-0:7']])
+    expect(removeTargetContact.mock.calls).toEqual([['radar-0-7']])
   })
 
   it('withdraws everything when stopped', () => {
@@ -98,7 +98,7 @@ describe('TargetContactReporter', () => {
     reporter.update('radars.radar-0.targets.7', target())
     reporter.update('radars.radar-1.targets.2', target())
     reporter.stop()
-    expect(removeTargetContact.mock.calls).toEqual([['radar-0:7'], ['radar-1:2']])
+    expect(removeTargetContact.mock.calls).toEqual([['radar-0-7'], ['radar-1-2']])
   })
 })
 

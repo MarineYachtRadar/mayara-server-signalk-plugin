@@ -29,6 +29,15 @@ function isNumber(v: unknown): v is number {
 }
 
 /**
+ * The server names a target without AIS `radar:<contact id>`. Joining with
+ * `-` keeps that clear of `radar:<radarId>:<n>`, the path this plugin's own
+ * radar alarms use, so the two plugins never write the same notification.
+ */
+function contactId(radarId: string, id: string): string {
+  return `${radarId}-${id}`
+}
+
+/**
  * A mayara ARPA target as a Targets API contact, or null when it is lost or
  * has no geographic position yet. Unlike a collision alarm, a contact does not
  * need a CPA: the server only needs to know where the target is.
@@ -53,7 +62,7 @@ export function toContact(
   }
   const { course, speed } = t.motion ?? {}
   return {
-    id: `${radarId}:${id}`,
+    id: contactId(radarId, id),
     type: 'radar',
     position: { latitude, longitude },
     ...(isNumber(course) && { courseOverGroundTrue: course }),
@@ -92,7 +101,7 @@ export class TargetContactReporter {
     const [, radarId, id] = match
     const contact = toContact(radarId, id, value, this.options.selfContext)
     if (!contact) {
-      this.remove(`${radarId}:${id}`)
+      this.remove(contactId(radarId, id))
       return
     }
     this.host.updateTargetContact(contact)
