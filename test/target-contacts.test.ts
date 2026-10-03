@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import { TargetContactReporter, targetsApiOf, toContact } from '../src/collision/target-contacts.js'
+import {
+  TargetContactReporter,
+  radarAlarmPreset,
+  targetsApiOf,
+  toContact
+} from '../src/collision/target-contacts.js'
 
 const SELF = 'vessels.urn:mrn:signalk:uuid:self'
 
@@ -105,5 +110,20 @@ describe('targetsApiOf', () => {
   it('returns the contact methods when the server has them', () => {
     const api = { updateTargetContact: vi.fn(), removeTargetContact: vi.fn() }
     expect(targetsApiOf(api)).toEqual(api)
+  })
+})
+
+describe('radarAlarmPreset', () => {
+  it('keeps radar alarms here unless the user hands them over', () => {
+    expect(radarAlarmPreset('coastal', true)).toBe('coastal')
+    expect(radarAlarmPreset('off', true)).toBe('off')
+  })
+
+  it('leaves radar alarms to the collision alerts plugin on a Targets API server', () => {
+    expect(radarAlarmPreset('collision-alerts-plugin', true)).toBe('off')
+  })
+
+  it('falls back to coastal when the server cannot pass radar targets on', () => {
+    expect(radarAlarmPreset('collision-alerts-plugin', false)).toBe('coastal')
   })
 })

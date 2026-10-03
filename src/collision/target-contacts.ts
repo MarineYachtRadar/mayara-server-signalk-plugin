@@ -1,3 +1,5 @@
+import type { PresetName } from './zones.js'
+
 /**
  * The contact a sensor plugin reports to the Signal K Targets API
  * (`app.updateTargetContact`). Mirrored here because the API is newer than the
@@ -118,6 +120,22 @@ export class TargetContactReporter {
       this.host.removeTargetContact(id)
     }
   }
+}
+
+/**
+ * The preset this plugin raises radar alarms with. The collision alerts
+ * plugin takes them over only when the user says so, since it may not be
+ * installed; on a server without the Targets API it cannot see radar targets,
+ * so they stay here at the default preset rather than reaching no one.
+ */
+export function radarAlarmPreset(
+  setting: PresetName | 'off' | 'collision-alerts-plugin',
+  hasTargetsApi: boolean
+): PresetName | 'off' {
+  if (setting !== 'collision-alerts-plugin') {
+    return setting
+  }
+  return hasTargetsApi ? 'off' : 'coastal'
 }
 
 /** The host's Targets API when the server has one. */

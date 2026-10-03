@@ -9,7 +9,7 @@ import { DeltaForwarder } from './delta-forwarder.js';
 import { DeltaAlarmSink, ManagedAlarmSink } from './collision/alarms.js';
 import { PRESETS } from './collision/zones.js';
 import { RadarCollisionMonitor, ownShipFrom } from './collision/radar-targets.js';
-import { TargetContactReporter, targetsApiOf } from './collision/target-contacts.js';
+import { TargetContactReporter, radarAlarmPreset, targetsApiOf } from './collision/target-contacts.js';
 import { ConfigSchema, SCHEMA_DEFAULTS } from './config/schema.js';
 import { awaitApproval, beginTokenRequest, deleteCachedToken, readCachedToken, readGithubToken, validateCachedToken, writeCachedToken } from './signalk-token.js';
 const MAYARA_IMAGE = 'ghcr.io/marineyachtradar/mayara-server';
@@ -1070,10 +1070,11 @@ export default function (app) {
         // upstream Signal K server. The forwarder owns its own reconnect
         // loop, so failing here just means it'll reach mayara on a later
         // attempt.
-        // On a server with the Targets API, radar targets go there and a
-        // collision alarm plugin raises one alarm per boat, linked to its AIS
-        // vessel when it has one. Raising radar alarms here as well would sound
-        // a second alarm for every boat seen on both AIS and radar.
+        // On a server with the Targets API, radar targets are always reported
+        // there so the server can link them to their AIS vessels. Radar alarms
+        // stay here unless the user hands them to the collision alerts plugin:
+        // that plugin may not be installed, and a missing alarm is worse than a
+        // duplicate one.
         const targetsApi = targetsApiOf(app);
         if (targetsApi && !contactReporter) {
             contactReporter = new TargetContactReporter(targetsApi, {
@@ -1081,8 +1082,8 @@ export default function (app) {
                 maxAge: RADAR_TARGET_MAX_AGE_MS
             });
         }
-        const collisionPreset = settings.collisionAlerts ?? SCHEMA_DEFAULTS.collisionAlerts;
-        if (!targetsApi && collisionPreset !== 'off' && !collisionMonitor) {
+        const collisionPreset = radarAlarmPreset(settings.collisionAlerts ?? SCHEMA_DEFAULTS.collisionAlerts, targetsApi !== null);
+        if (collisionPreset !== 'off' && !collisionMonitor) {
             collisionMonitor = new RadarCollisionMonitor({
                 zones: PRESETS[collisionPreset],
                 maxAge: RADAR_TARGET_MAX_AGE_MS,

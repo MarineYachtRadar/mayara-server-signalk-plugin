@@ -17,13 +17,14 @@ interface PanelConfig {
   telemetry?: boolean
 }
 
-type CollisionPreset = 'off' | 'harbour' | 'coastal' | 'offshore'
+type CollisionPreset = 'off' | 'harbour' | 'coastal' | 'offshore' | 'collision-alerts-plugin'
 
 const COLLISION_PRESETS: Array<{ value: CollisionPreset; label: string }> = [
   { value: 'off', label: 'Off' },
   { value: 'harbour', label: 'Harbour: warn 100 m / 5 min, alarm 50 m / 2 min' },
   { value: 'coastal', label: 'Coastal: warn 0.5 NM / 12 min, alarm 0.25 NM / 6 min' },
-  { value: 'offshore', label: 'Offshore: warn 1 NM / 20 min, alarm 0.5 NM / 10 min' }
+  { value: 'offshore', label: 'Offshore: warn 1 NM / 20 min, alarm 0.5 NM / 10 min' },
+  { value: 'collision-alerts-plugin', label: 'Leave to the Collision Alerts plugin' }
 ]
 
 function isCollisionPreset(value: string): value is CollisionPreset {

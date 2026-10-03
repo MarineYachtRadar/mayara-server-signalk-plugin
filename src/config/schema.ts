@@ -76,7 +76,8 @@ export const ConfigSchema = Type.Object({
       Type.Literal('off'),
       Type.Literal('harbour'),
       Type.Literal('coastal'),
-      Type.Literal('offshore')
+      Type.Literal('offshore'),
+      Type.Literal('collision-alerts-plugin')
     ],
     {
       default: 'coastal',
@@ -86,9 +87,11 @@ export const ConfigSchema = Type.Object({
         'point of approach (CPA) comes too close too soon. Harbour: warn at ' +
         '100 m / 5 min, alarm at 50 m / 2 min. Coastal: warn at 0.5 NM / 12 ' +
         'min, alarm at 0.25 NM / 6 min. Offshore: warn at 1 NM / 20 min, alarm ' +
-        'at 0.5 NM / 10 min. On Signal K servers with the Targets API, radar ' +
-        'targets are handed to the server instead and the collision alerts ' +
-        'plugin raises the alarms, so this setting has no effect there.'
+        'at 0.5 NM / 10 min. collision-alerts-plugin: leave radar alarms to ' +
+        'the Signal K Collision Alerts plugin, which raises one alarm per boat ' +
+        'even when it is seen on both AIS and radar. That needs a Signal K ' +
+        'server with the Targets API; on older servers this falls back to ' +
+        'Coastal so radar alarms are never lost.'
     }
   ),
 

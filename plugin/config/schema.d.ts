@@ -10,7 +10,7 @@ export declare const ConfigSchema: Type.TObject<{
     directGuiUrl: Type.TBoolean;
     discoveryPollInterval: Type.TNumber;
     reconnectInterval: Type.TNumber;
-    collisionAlerts: Type.TUnion<[Type.TLiteral<"off">, Type.TLiteral<"harbour">, Type.TLiteral<"coastal">, Type.TLiteral<"offshore">]>;
+    collisionAlerts: Type.TUnion<[Type.TLiteral<"off">, Type.TLiteral<"harbour">, Type.TLiteral<"coastal">, Type.TLiteral<"offshore">, Type.TLiteral<"collision-alerts-plugin">]>;
     telemetry: Type.TBoolean;
 }>;
 export type Config = Static<typeof ConfigSchema>;
