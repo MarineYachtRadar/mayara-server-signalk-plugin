@@ -1,12 +1,44 @@
 name: Publish Package
 
+# Publishes the tag it runs on to npm. Release tags come from release-please:
+# merging its release PR creates the tag and the GitHub Release, then
+# release-please.yml dispatches this workflow on the tag. A tag pushed by
+# hand (a -beta.N / -rc.N pre-release) starts it through the tag trigger,
+# and the Release is then created here.
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 jobs:
+  # npm publishes package.json's version whatever the tag is called, and
+  # neither the `v*` filter nor a dispatch checks the name. Checked before
+  # anything else, so a mismatched tag gets neither a Release nor a publish.
+  # A dispatch can name any ref; one that is not a release tag skips this
+  # job, and with it the rest.
+  version:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check the tag names package.json's version
+        run: |
+          version=$(jq -r .version package.json)
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $version - refusing to publish."
+            exit 1
+          fi
+
   release:
+    needs: version
+    # On a dispatch release-please has created the Release already.
+    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -26,7 +58,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   publish:
-    needs: release
+    needs: [version, release]
+    # A dispatch skips the release job, which must not skip this one.
+    if: ${{ !cancelled() && needs.version.result == 'success' && needs.release.result != 'failure' }}
     runs-on: ubuntu-24.04
     permissions:
       id-token: write

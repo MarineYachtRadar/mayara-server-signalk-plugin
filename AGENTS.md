@@ -118,22 +118,23 @@ A bundled PR that "while I was in here, I also fixed X" is **not** acceptable �
 
 This rule exists because:
 
-1. The publish workflow generates GitHub Release notes from PR titles. Bundled PRs produce a single line that hides the smaller change.
+1. The release notes are generated from PR titles. Bundled PRs produce a single line that hides the smaller change.
 2. Reverts and bisects are easier when each PR is one thing.
 3. Reviewers can reason about each change in isolation.
 
 If you're tempted to bundle, the right move is to open the second PR off the merge of the first — the small extra round-trip is worth it.
 
-### Version bumps
+### Releases
 
-The `chore(release): X.Y.Z` commit is its **own** PR. Don't include a version bump in a feature or fix PR. The release PR can include the README/CHANGELOG-style summary that documents what's shipping.
+release-please (`.github/workflows/release-please.yml`) cuts releases. **Never bump `package.json`'s version by hand** in any PR, and don't push release tags.
 
-Workflow:
+1. Merge feature/fix PRs. The PR title (the squash commit's subject) decides the bump: `feat` → minor, `fix` / `perf` / `revert` / `build(deps)` → patch, `!` after the type or a `BREAKING CHANGE:` footer → major.
+2. release-please keeps one `chore(release): X.Y.Z` PR open that bumps `package.json`; its description is the release notes. `docs`, `ci`, `test`, `chore`, `refactor` and `build(deps-dev)` merges don't open or refresh it on their own — they ship with the next release.
+3. Merging that PR is the release: the workflow tags `vX.Y.Z`, creates the GitHub Release, and dispatches `publish.yml` on the tag.
 
-1. Open and merge feature/fix PRs (no version bump in any of them).
-2. Open a separate `release-X.Y.Z` branch with only `package.json` (and `plugin/` build output) bumped, with a `chore(release): X.Y.Z` commit.
-3. Merge that PR.
-4. Tag `vX.Y.Z` from `main` and push the tag — this triggers `publish.yml`.
+To force a version, merge a commit with a `Release-As: X.Y.Z` footer. To refresh the release PR after changing `release-please-config.json` or `.github/release.yml`, run the release-please workflow by hand (Actions → release-please → Run workflow). Pre-releases (`-beta.N` / `-rc.N`) are still tagged by hand from a branch: bump `package.json` there, then push the tag, which starts `publish.yml` directly and publishes under npm's `beta` dist-tag.
+
+Release notes are grouped by label (`.github/release.yml`). `label-by-title.yml` sets the label from the PR title, so a PR's title type is what places it: `feat`/`perf` → Features, `fix`/`revert` → Fixes, `build(deps)` → Dependencies, `docs` and untyped → Other, and `ci`/`test`/`chore`/`refactor`/`style`/`build(deps-dev)` are left out.
 
 ### Branch naming
 
@@ -141,7 +142,7 @@ Workflow:
 
 ### Commit messages
 
-Angular conventional commits: `<type>(<scope>): <subject>` (`feat`, `fix`, `chore`, `docs`, `ci`, `test`, `refactor`). Subject in imperative mood ("add" not "added"), no trailing period.
+Angular conventional commits: `<type>(<scope>): <subject>` (`feat`, `fix`, `perf`, `chore`, `docs`, `ci`, `test`, `refactor`, `build`). Subject in imperative mood ("add" not "added"), no trailing period.
 
 For non-trivial changes, add a body explaining the **why**. Don't restate what the diff already shows.
 
@@ -154,8 +155,9 @@ No `Co-Authored-By` lines. No "Generated with Claude Code" attribution.
 ## CI / publishing
 
 - **Plugin CI** (`.github/workflows/signalk-ci.yml`) calls the upstream `SignalK/signalk-server` reusable workflow. It runs on push to `main`, on pull_request to `main`, and on `workflow_dispatch`. PR runs surface as checks on the PR itself; the push-to-main run still covers post-merge verification.
-- **Publish** (`.github/workflows/publish.yml`) fires on `v*` tag push. It creates a GitHub Release with auto-generated notes (one line per PR since the previous tag), then `npm publish`es via OIDC trusted publishing.
-- **No `NPM_TOKEN` secret exists or is needed.** Trusted publishing is configured on npm; do not add `NODE_AUTH_TOKEN` to the workflow.
+- **release-please** (`.github/workflows/release-please.yml`) runs on push to `main` and on `workflow_dispatch` — see [Releases](#releases). A `gate` job stops it for pushes with nothing releasable. Its regex must keep matching `pull-request-title-pattern` in `release-please-config.json` (`chore(release): ${version}`): if the release PR's own merge stops matching, no tag is ever created. The title also has to stay in `.coderabbit.yaml`'s `ignore_title_keywords`.
+- **Publish** (`.github/workflows/publish.yml`) is dispatched by release-please on each release tag, and also fires on a hand-pushed `v*` tag (creating the GitHub Release itself in that case). It refuses a tag that doesn't name `package.json`'s version, then `npm publish`es via OIDC trusted publishing.
+- **No `NPM_TOKEN` secret exists or is needed.** Trusted publishing is configured on npm for `publish.yml` specifically — do not rename it or publish from another workflow, and do not add `NODE_AUTH_TOKEN`. A tag created with `GITHUB_TOKEN` starts no workflow, which is why release-please dispatches `publish.yml` rather than relying on the tag trigger.
 
 ## Plugin-specific gotchas
 
