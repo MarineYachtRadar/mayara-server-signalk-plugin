@@ -135,10 +135,10 @@ describe('MayaraClient', () => {
     )
   })
 
-  it('uses /targets/acquire for target acquisition', async () => {
+  it('acquires a target with POST to /targets, as the Radar API specifies', async () => {
     serverPort = await createTestServer((req, res) => {
       expect(req.method).toBe('POST')
-      expect(req.url).toBe('/signalk/v2/api/vessels/self/radars/radar-0/targets/acquire')
+      expect(req.url).toBe('/signalk/v2/api/vessels/self/radars/radar-0/targets')
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ targetId: 1, radarId: 'radar-0' }))
     })

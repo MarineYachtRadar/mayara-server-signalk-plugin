@@ -112,7 +112,7 @@ export class MayaraClient {
     bearing: number,
     distance: number
   ): Promise<Record<string, unknown>> {
-    return (await this.request('POST', `${API_BASE}/${radarId}/targets/acquire`, {
+    return (await this.request('POST', `${API_BASE}/${radarId}/targets`, {
       bearing,
       distance
     })) as Record<string, unknown>
