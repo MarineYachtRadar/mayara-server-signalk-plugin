@@ -86,7 +86,9 @@ export const ConfigSchema = Type.Object({
         'point of approach (CPA) comes too close too soon. Harbour: warn at ' +
         '100 m / 5 min, alarm at 50 m / 2 min. Coastal: warn at 0.5 NM / 12 ' +
         'min, alarm at 0.25 NM / 6 min. Offshore: warn at 1 NM / 20 min, alarm ' +
-        'at 0.5 NM / 10 min.'
+        'at 0.5 NM / 10 min. On Signal K servers with the Targets API, radar ' +
+        'targets are handed to the server instead and the collision alerts ' +
+        'plugin raises the alarms, so this setting has no effect there.'
     }
   ),
 
