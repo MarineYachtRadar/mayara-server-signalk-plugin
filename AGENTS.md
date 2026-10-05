@@ -23,7 +23,7 @@ The plugin is a **thin proxy**: it registers as a Radar API provider, forwards c
 - `gui-proxy.ts` — `createGuiProxy`, the GUI reverse proxy, built directly on `httpxy`. It resolves the target per request, re-sends a body Signal K's `express.json()` has already read (without it every control PUT hangs), and answers an unreachable upstream with 504. Takes the mount-stripped path and passes it through `rewriteGuiProxyPath`.
 - `gui-proxy-path.ts` — the pure `rewriteGuiProxyPath` used by the GUI reverse proxy: `/signalk…` and `/v2…` pass straight through to mayara, everything else gets `/gui` prepended for the static asset server.
 - `signalk-token.ts` — the device-access-request flow (POST request, poll for approval, validate) plus token-cache file helpers.
-- `config/schema.ts` — `ConfigSchema` (the Admin-UI form) and `SCHEMA_DEFAULTS` (the runtime default merge — see the gotcha below).
+- `config/schema.ts` — `ConfigSchema` (the Admin-UI form), `SCHEMA_DEFAULTS` (derived from it) and `parseConfig`, which turns the stored config into a complete, valid `Config` (see the gotcha below).
 - `types.ts` — typed local mirrors of the cross-plugin APIs (signalk-container's `ContainerManagerApi`, the SK server surface the plugin uses).
 
 Each module has a matching `test/*.test.ts`; `test/container-integration.test.ts` carries the lifecycle/regression guards.
@@ -172,9 +172,11 @@ No `Co-Authored-By` lines. No "Generated with Claude Code" attribution.
 
 Signal K only uses the schema's `default` annotations to seed the JSON-schema form in the Admin UI. They are **not** materialised into the runtime config object passed to `plugin.start()`.
 
-When the plugin is auto-enabled (`signalk-plugin-enabled-by-default: true`), `start()` is called with an empty `{}`. Without merging defaults, `settings.managedContainer` is `undefined`, the container-startup branch is silently skipped, and the plugin sits in an endless reconnect loop.
+When the plugin is auto-enabled (`signalk-plugin-enabled-by-default: true`), `start()` is called with an empty `{}`. Without defaults, `settings.managedContainer` is `undefined`, the container-startup branch is silently skipped, and the plugin sits in an endless reconnect loop.
 
-`src/config/schema.ts` exports `SCHEMA_DEFAULTS`; `start()` in `src/index.ts` spreads it under the incoming config. **Always preserve this merge** when modifying `start()`. Regression test in `test/container-integration.test.ts` ("starts the container even when start() is called with empty config") guards against this.
+`start()` in `src/index.ts` runs the incoming config through `parseConfig` (`src/config/schema.ts`, on `typebox/value`). Missing settings take their schema defaults, values that convert cleanly (`"6502"` for a number) are converted, and any other invalid setting is replaced by its default on its own: logged with `app.error` and listed after "Connected" in the plugin status. `SCHEMA_DEFAULTS` is derived from `ConfigSchema`, so a new setting only needs its `default` there. **Always keep `start()` going through `parseConfig`.** Guarded by `test/config-schema.test.ts` and, in `test/container-integration.test.ts`, "starts the container even when start() is called with empty config".
+
+Values outside the schema's bounds are replaced too, so a test cannot shorten a cadence below its minimum (a 10 ms `reconnectInterval`, say). Tests that watch the reconnect cadence pass `{ fakeTimers: true }` to `loadPlugin` and advance the clock instead.
 
 ### Cross-plugin signalk-container API
 
