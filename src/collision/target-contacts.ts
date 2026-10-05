@@ -47,6 +47,12 @@ export function targetValues(value: unknown): PathValue[] | null {
   ]
 }
 
+const LOST_VALUES: PathValue[] = [
+  { path: 'navigation.position' as Path, value: null },
+  { path: 'navigation.courseOverGroundTrue' as Path, value: null },
+  { path: 'navigation.speedOverGround' as Path, value: null }
+]
+
 /**
  * Publishes mayara's ARPA targets as `targets.radar:<radarId>-<n>` contexts,
  * where chart plotters, collision alarms and a fusion plugin that links them
@@ -100,10 +106,13 @@ export class RadarTargetPublisher {
     }
   }
 
-  /** A null position tells consumers the track is gone. */
+  /**
+   * A null position tells consumers the track is gone; course and speed are
+   * cleared too, so nothing reads the motion of a track that no longer exists.
+   */
   private lose(context: string): void {
     if (this.lastSeen.delete(context)) {
-      this.send(context, [{ path: 'navigation.position' as Path, value: null }])
+      this.send(context, LOST_VALUES)
     }
   }
 

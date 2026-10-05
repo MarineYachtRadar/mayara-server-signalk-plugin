@@ -62,6 +62,12 @@ describe('targetValues', () => {
   })
 })
 
+const LOST = {
+  'navigation.position': null,
+  'navigation.courseOverGroundTrue': null,
+  'navigation.speedOverGround': null
+}
+
 describe('RadarTargetPublisher', () => {
   it('publishes ARPA targets under targets.* and ignores other radar paths', () => {
     const { publisher, published } = setup()
@@ -93,14 +99,12 @@ describe('RadarTargetPublisher', () => {
     expect(published().map(([context]) => context)).toEqual(['targets.radar:a-1-2'])
   })
 
-  it('publishes a null position once for a target mayara reports lost', () => {
+  it('clears position, course and speed once for a target mayara reports lost', () => {
     const { publisher, published } = setup()
     publisher.update('radars.radar-0.targets.7', target())
     publisher.update('radars.radar-0.targets.7', null)
     publisher.update('radars.radar-0.targets.7', null)
-    expect(published().slice(1)).toEqual([
-      ['targets.radar:radar-0-7', { 'navigation.position': null }]
-    ])
+    expect(published().slice(1)).toEqual([['targets.radar:radar-0-7', LOST]])
   })
 
   it('loses targets mayara stopped reporting', () => {
@@ -110,9 +114,7 @@ describe('RadarTargetPublisher', () => {
     publisher.update('radars.radar-0.targets.8', target())
     advanceClock(15_000)
     publisher.expire()
-    expect(published().slice(2)).toEqual([
-      ['targets.radar:radar-0-7', { 'navigation.position': null }]
-    ])
+    expect(published().slice(2)).toEqual([['targets.radar:radar-0-7', LOST]])
   })
 
   it('loses everything when stopped', () => {
