@@ -1475,12 +1475,22 @@ describe('mayara-server-signalk-plugin container integration', () => {
     it('replaces an invalid setting with its default, logs it and flags it in the status', async () => {
       const { plugin, app } = await loadPlugin({ discoveryPollInterval: -5 })
       expect(app.error).toHaveBeenCalledWith(
-        'Setting discoveryPollInterval: -5 must be >= 5; using the default, 10'
+        'Setting discoveryPollInterval must be >= 5; using the default, 10'
       )
       const statuses = app.setPluginStatus.mock.calls.map((c) => c[0] as string)
       expect(statuses).toContain(
         'Connected - 0 radar(s) · invalid settings replaced by defaults: discoveryPollInterval'
       )
+      await plugin.stop()
+    })
+
+    it('never logs the rejected value, which may hold a token', async () => {
+      const { plugin, app } = await loadPlugin({
+        mayaraArgs: { '--signalk-token': 'secret-jwt' }
+      })
+      const logged = app.error.mock.calls.map((c) => String(c[0]))
+      expect(logged).toEqual(['Setting mayaraArgs entry 0 must be string; using the default, []'])
+      expect(logged.join('\n')).not.toContain('secret-jwt')
       await plugin.stop()
     })
 

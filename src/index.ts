@@ -187,10 +187,9 @@ export default function (app: MayaraServerAPI): Plugin {
       // and replaces invalid ones, so callers can rely on each field being
       // present and valid.
       const { config: merged, invalid } = parseConfig(config)
-      for (const { key, value, reason } of invalid) {
+      for (const { key, reason } of invalid) {
         app.error(
-          `Setting ${key}: ${JSON.stringify(value)} ${reason}; ` +
-            `using the default, ${JSON.stringify(SCHEMA_DEFAULTS[key])}`
+          `Setting ${key} ${reason}; using the default, ${JSON.stringify(SCHEMA_DEFAULTS[key])}`
         )
       }
       configHint =

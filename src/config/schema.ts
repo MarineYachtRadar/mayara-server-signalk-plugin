@@ -125,10 +125,13 @@ function defaultConfig(): Config {
   return value
 }
 
-/** A stored setting the schema rejects, replaced by its default. */
+/**
+ * A stored setting the schema rejects, replaced by its default. The stored
+ * value is left out on purpose: `mayaraArgs` can carry a Signal K token, and
+ * these end up in the server log.
+ */
 export interface InvalidSetting {
   key: keyof Config
-  value: unknown
   reason: string
 }
 
@@ -140,17 +143,27 @@ export interface InvalidSetting {
  * Keys the schema does not define are dropped. `stored` is not modified.
  */
 export function parseConfig(stored: unknown): { config: Config; invalid: InvalidSetting[] } {
-  const input = isRecord(stored) ? stored : {}
+  const keys = Object.keys(ConfigSchema.properties) as Array<keyof Config>
+  const working = Clone<Record<string, unknown>>(isRecord(stored) ? stored : {})
+  // Convert would turn a stored null into a plausible value (false for a
+  // boolean, "null" for a string), so take nulls out first: Default fills
+  // the gap and the loop below reports them.
+  const nulls = new Set(keys.filter((key) => working[key] === null))
+  for (const key of nulls) working[key] = undefined
   const candidate = Clean(
     ConfigSchema,
-    Convert(ConfigSchema, Default(ConfigSchema, Clone(input)))
+    Convert(ConfigSchema, Default(ConfigSchema, working))
   ) as Record<string, unknown>
   const defaults = defaultConfig()
   const invalid: InvalidSetting[] = []
-  for (const key of Object.keys(ConfigSchema.properties) as Array<keyof Config>) {
+  for (const key of keys) {
     const schema: TSchema = ConfigSchema.properties[key]
+    if (nulls.has(key)) {
+      invalid.push({ key, reason: describeProblem(schema, null) })
+      continue
+    }
     if (Check(schema, candidate[key])) continue
-    invalid.push({ key, value: input[key], reason: describeProblem(schema, candidate[key]) })
+    invalid.push({ key, reason: describeProblem(schema, candidate[key]) })
     candidate[key] = defaults[key]
   }
   if (!Check(ConfigSchema, candidate)) {
@@ -169,5 +182,9 @@ function describeProblem(schema: TSchema, value: unknown): string {
   if (Type.IsUnion(schema) && schema.anyOf.every((option) => Type.IsLiteral(option))) {
     return `must be one of ${schema.anyOf.map((option) => String(option.const)).join(', ')}`
   }
-  return Errors(schema, value)[0]?.message ?? 'is invalid'
+  const error = Errors(schema, value)[0]
+  // An error inside an array (one of the mayaraArgs) names the entry.
+  return error.instancePath === ''
+    ? error.message
+    : `entry ${error.instancePath.slice(1)} ${error.message}`
 }

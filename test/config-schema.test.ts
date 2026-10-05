@@ -50,13 +50,23 @@ describe('parseConfig', () => {
     })
     expect(config).toEqual({ ...SCHEMA_DEFAULTS, host: 'radar.local' })
     expect(invalid).toEqual([
-      { key: 'port', value: 'abc', reason: 'must be number' },
-      { key: 'discoveryPollInterval', value: -5, reason: 'must be >= 5' },
+      { key: 'port', reason: 'must be number' },
+      { key: 'discoveryPollInterval', reason: 'must be >= 5' },
       {
         key: 'collisionAlerts',
-        value: 'coastel',
         reason: 'must be one of off, harbour, coastal, offshore, collision-alerts-plugin'
       }
+    ])
+  })
+
+  it('replaces a null setting instead of converting it', () => {
+    // Converted, these would be `false` (no managed container) and the
+    // hostname "null", both silently.
+    const { config, invalid } = parseConfig({ managedContainer: null, host: null })
+    expect(config).toEqual(SCHEMA_DEFAULTS)
+    expect(invalid).toEqual([
+      { key: 'managedContainer', reason: 'must be boolean' },
+      { key: 'host', reason: 'must be string' }
     ])
   })
 
@@ -66,7 +76,7 @@ describe('parseConfig', () => {
   })
 
   it('leaves the stored configuration untouched', () => {
-    const stored = { port: '6510', mayaraArgs: ['-v'], discoveryPollInterval: -5 }
+    const stored = { port: '6510', mayaraArgs: ['-v'], discoveryPollInterval: -5, host: null }
     const before = structuredClone(stored)
     parseConfig(stored)
     expect(stored).toEqual(before)
