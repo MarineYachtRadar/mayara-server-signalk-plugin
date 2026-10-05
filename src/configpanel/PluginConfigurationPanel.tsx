@@ -2,22 +2,9 @@ import React, { useState, useEffect, useCallback } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { deriveVersionsView, runningTagFallback, splitVersions } from './versionsView.js'
 import type { VersionEntry } from './versionsView.js'
+import type { Config } from '../config/schema.js'
 
-/** The plugin configuration this panel edits. Mirrors src/config/schema.ts. */
-interface PanelConfig {
-  managedContainer?: boolean
-  mayaraVersion?: string
-  mayaraArgs?: string[]
-  host?: string
-  port?: number
-  secure?: boolean
-  discoveryPollInterval?: number
-  reconnectInterval?: number
-  collisionAlerts?: CollisionPreset
-  telemetry?: boolean
-}
-
-type CollisionPreset = 'off' | 'harbour' | 'coastal' | 'offshore' | 'collision-alerts-plugin'
+type CollisionPreset = Config['collisionAlerts']
 
 const COLLISION_PRESETS: Array<{ value: CollisionPreset; label: string }> = [
   { value: 'off', label: 'Off' },
@@ -33,8 +20,11 @@ function isCollisionPreset(value: string): value is CollisionPreset {
 
 /** Props the Signal K Admin UI passes to a federated config panel. */
 interface PluginConfigurationPanelProps {
-  configuration?: PanelConfig
-  save: (configuration: PanelConfig) => void
+  // Empty until the plugin is first saved, and missing any setting added
+  // since.
+  configuration?: Partial<Config>
+  // Replaces the stored configuration, so every setting must be passed.
+  save: (configuration: Config) => void
 }
 
 /** The subset of GET /status this panel renders. */
@@ -403,7 +393,7 @@ export default function PluginConfigurationPanel({
   configuration,
   save
 }: PluginConfigurationPanelProps) {
-  const cfg: PanelConfig = configuration || {}
+  const cfg: Partial<Config> = configuration || {}
 
   const [managedContainer, setManagedContainer] = useState(cfg.managedContainer !== false)
   const [mayaraVersion, setMayaraVersion] = useState(cfg.mayaraVersion || 'latest')
@@ -420,6 +410,8 @@ export default function PluginConfigurationPanel({
   )
   const [reconnectInterval, setReconnectInterval] = useState(String(cfg.reconnectInterval ?? 5))
   const [telemetry, setTelemetry] = useState(cfg.telemetry !== false)
+  const [requestSignalkToken, setRequestSignalkToken] = useState(cfg.requestSignalkToken !== false)
+  const [directGuiUrl, setDirectGuiUrl] = useState(cfg.directGuiUrl !== false)
   const [collisionAlerts, setCollisionAlerts] = useState<CollisionPreset>(
     cfg.collisionAlerts ?? 'coastal'
   )
@@ -520,9 +512,11 @@ export default function PluginConfigurationPanel({
       managedContainer,
       mayaraVersion,
       mayaraArgs: args,
+      requestSignalkToken,
       host: managedContainer ? '127.0.0.1' : host,
       port: portValue,
       secure,
+      directGuiUrl,
       discoveryPollInterval: discoveryValue,
       reconnectInterval: reconnectValue,
       collisionAlerts,
@@ -813,6 +807,26 @@ export default function PluginConfigurationPanel({
             </span>
           </div>
 
+          <div style={S.fieldRow}>
+            <label style={S.label} htmlFor="mayara-request-token">
+              Request Signal K token
+            </label>
+            <input
+              id="mayara-request-token"
+              type="checkbox"
+              style={S.checkbox}
+              checked={requestSignalkToken}
+              onChange={(e) => {
+                setRequestSignalkToken(e.target.checked)
+              }}
+            />
+            <span style={S.hint}>
+              {requestSignalkToken
+                ? 'Asks for access under Security → Access Requests, for the full AIS overlay'
+                : 'mayara stays on the unauthenticated TCP stream'}
+            </span>
+          </div>
+
           <CollapsibleSection title="Advanced">
             <div style={S.fieldRow}>
               <label style={S.label} htmlFor="mayara-args">
@@ -878,6 +892,26 @@ export default function PluginConfigurationPanel({
               setSecure(e.target.checked)
             }}
           />
+        </div>
+
+        <div style={S.fieldRow}>
+          <label style={S.label} htmlFor="mayara-direct-gui">
+            Open GUI directly on mayara-server
+          </label>
+          <input
+            id="mayara-direct-gui"
+            type="checkbox"
+            style={S.checkbox}
+            checked={directGuiUrl}
+            onChange={(e) => {
+              setDirectGuiUrl(e.target.checked)
+            }}
+          />
+          <span style={S.hint}>
+            {directGuiUrl
+              ? "The browser needs to reach mayara-server's port"
+              : 'Through Signal K: only its port needs to be open, and the GUI uses its TLS'}
+          </span>
         </div>
 
         <div style={S.fieldRow}>
