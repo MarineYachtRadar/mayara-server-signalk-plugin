@@ -7,18 +7,13 @@ import { rewriteGuiProxyPath } from './gui-proxy-path.js'
 /** An incoming request, possibly already read into `body` by Signal K's body parsers. */
 export type ProxiedRequest = IncomingMessage & { body?: unknown }
 
-/** Rewrites a parsed JSON response body before it reaches the browser. */
-export type JsonRewriter = (body: unknown) => unknown
-
-/**
- * Paths are as the `/gui` mount hands them over: the `/plugins/<id>/gui`
- * prefix stripped, before `rewriteGuiProxyPath`.
- */
 export interface GuiProxyOptions {
-  /** Origin (`http://host:port`) to forward the request to, resolved per request. */
+  /**
+   * Origin (`http://host:port`) to forward a request to, resolved per
+   * request from its path as the `/gui` mount hands it over: the
+   * `/plugins/<id>/gui` prefix stripped, before `rewriteGuiProxyPath`.
+   */
   target: (path: string) => string
-  /** A rewriter for the JSON responses on `path`; undefined streams them untouched. */
-  jsonRewriter?: (path: string) => JsonRewriter | undefined
 }
 
 export interface GuiProxy {
@@ -26,9 +21,6 @@ export interface GuiProxy {
   upgrade(req: IncomingMessage, socket: Socket, head: Buffer): void
 }
 
-// Framing headers describe the upstream connection, not the buffered body
-// sent on.
-const FRAMING_HEADERS = new Set(['connection', 'keep-alive', 'transfer-encoding', 'trailer'])
 const UNREACHABLE_CODES = new Set(['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'ETIMEDOUT'])
 
 /**
@@ -37,16 +29,9 @@ const UNREACHABLE_CODES = new Set(['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'E
  */
 export function createGuiProxy(options: GuiProxyOptions): GuiProxy {
   const proxy = createProxyServer({})
-  const rewriters = new WeakMap<IncomingMessage, JsonRewriter>()
 
   proxy.on('proxyReq', (proxyReq, req) => {
-    // The rewriter parses the body, so ask upstream not to compress it.
-    if (rewriters.has(req)) proxyReq.removeHeader('accept-encoding')
     resendParsedBody(proxyReq, req)
-  })
-  proxy.on('proxyRes', (proxyRes, req, res) => {
-    const rewrite = rewriters.get(req)
-    if (rewrite) sendRewritten(proxyRes, req, res, rewrite)
   })
   // With a listener attached, httpxy reports failures here instead of
   // rejecting the web()/ws() promise.
@@ -72,14 +57,10 @@ export function createGuiProxy(options: GuiProxyOptions): GuiProxy {
         fail(err, res)
         return
       }
-      const rewrite = options.jsonRewriter?.(path)
-      if (rewrite) rewriters.set(req, rewrite)
       req.url = rewriteGuiProxyPath(path)
-      proxy
-        .web(req, res, { ...opts, selfHandleResponse: rewrite !== undefined })
-        .catch((err: unknown) => {
-          fail(err, res)
-        })
+      proxy.web(req, res, opts).catch((err: unknown) => {
+        fail(err, res)
+      })
     },
 
     upgrade(req, socket, head) {
@@ -138,47 +119,6 @@ function resendParsedBody(proxyReq: ClientRequest, req: ProxiedRequest): void {
   proxyReq.removeHeader('transfer-encoding')
   proxyReq.setHeader('content-length', Buffer.byteLength(data))
   proxyReq.write(data)
-}
-
-function sendRewritten(
-  proxyRes: IncomingMessage,
-  req: IncomingMessage,
-  res: ServerResponse,
-  rewrite: JsonRewriter
-): void {
-  const chunks: Buffer[] = []
-  proxyRes.on('data', (chunk: Buffer) => {
-    chunks.push(chunk)
-  })
-  proxyRes.on('end', () => {
-    const status = proxyRes.statusCode ?? 502
-    const bodyless = req.method === 'HEAD' || status === 204 || status === 304
-    res.statusCode = status
-    for (const [name, value] of Object.entries(proxyRes.headers)) {
-      if (value === undefined || FRAMING_HEADERS.has(name)) continue
-      if (name === 'content-length' && !bodyless) continue
-      res.setHeader(name, value)
-    }
-    if (bodyless) {
-      res.end()
-      return
-    }
-    let body = Buffer.concat(chunks)
-    const type = proxyRes.headers['content-type'] ?? ''
-    // An upstream that compressed anyway sent a body this cannot parse;
-    // it goes on untouched, under its own content-encoding.
-    const encoded = (proxyRes.headers['content-encoding'] ?? 'identity') !== 'identity'
-    if (!encoded && type.includes('application/json')) {
-      try {
-        const parsed: unknown = JSON.parse(body.toString('utf8'))
-        body = Buffer.from(JSON.stringify(rewrite(parsed)))
-      } catch {
-        // Not the JSON it claimed to be: pass it on untouched.
-      }
-    }
-    res.setHeader('content-length', body.length)
-    res.end(body)
-  })
 }
 
 function fail(err: unknown, res: ServerResponse | Socket | undefined): void {
