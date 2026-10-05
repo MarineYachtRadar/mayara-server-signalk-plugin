@@ -31,7 +31,7 @@ import {
   ContainerResourceLimits,
   MayaraServerAPI
 } from './types.js'
-import { ConfigSchema, Config, SCHEMA_DEFAULTS } from './config/schema.js'
+import { ConfigSchema, Config, SCHEMA_DEFAULTS, parseConfig } from './config/schema.js'
 import {
   awaitApproval,
   beginTokenRequest,
@@ -160,6 +160,10 @@ export default function (app: MayaraServerAPI): Plugin {
   // is available, so a stale image is visible where the operator already
   // looks instead of silently running an old build. Empty otherwise.
   let updateHint = ''
+  // Appended to the "Connected" status line while the stored configuration
+  // holds settings that were replaced by their defaults, so a mistyped
+  // hand-edit shows where the operator looks. Empty otherwise.
+  let configHint = ''
   const knownRadars = new Set<string>()
   // Track the WebSocket upgrade listener so stop() can detach it.
   // The HTTP server outlives plugin restarts (disable/enable, config
@@ -175,13 +179,24 @@ export default function (app: MayaraServerAPI): Plugin {
 
     schema: ConfigSchema,
 
-    start(config: Partial<Config>) {
+    start(config: unknown) {
       app.debug('Starting mayara-server-signalk-plugin')
-      // Signal K does not seed schema defaults into the runtime config —
+      // Signal K does not seed schema defaults into the runtime config:
       // when the plugin is auto-enabled (or enabled without saving the
-      // form), `config` is `{}`. Merge defaults so callers can rely on
-      // every field being present.
-      const merged: Config = { ...SCHEMA_DEFAULTS, ...config }
+      // form), `config` is `{}`. parseConfig fills in every missing setting
+      // and replaces invalid ones, so callers can rely on each field being
+      // present and valid.
+      const { config: merged, invalid } = parseConfig(config)
+      for (const { key, value, reason } of invalid) {
+        app.error(
+          `Setting ${key}: ${JSON.stringify(value)} ${reason}; ` +
+            `using the default, ${JSON.stringify(SCHEMA_DEFAULTS[key])}`
+        )
+      }
+      configHint =
+        invalid.length > 0
+          ? ` · invalid settings replaced by defaults: ${invalid.map((i) => i.key).join(', ')}`
+          : ''
       currentSettings = merged
       // New generation: supersedes any token loop left over from a prior
       // start (a fast disable/enable or config save) so only the loop this
@@ -1235,9 +1250,10 @@ export default function (app: MayaraServerAPI): Plugin {
   }
 
   // Compose the "Connected" status line, appending the update hint when
-  // a newer container image is available.
+  // a newer container image is available and the config hint when settings
+  // were replaced by their defaults.
   function connectedStatus(radarCount: number): string {
-    return `Connected - ${radarCount} radar(s)${updateHint}`
+    return `Connected - ${radarCount} radar(s)${updateHint}${configHint}`
   }
 
   // Ask signalk-container's (offline-tolerant, cached) update service

@@ -55,6 +55,8 @@ npm link @marineyachtradar/signalk-plugin
 
 The plugin provides a custom configuration panel in the SignalK Admin UI.
 
+If the stored configuration holds a value the plugin cannot use, for instance after a hand edit (a port that is not a number, an interval outside its range, an unknown collision preset), that setting falls back to its default and the rest are kept. The plugin logs each replaced setting with the reason and lists it after "Connected" in its status.
+
 ### Container Mode (default)
 
 With **signalk-container** installed, the plugin automatically pulls and manages the `ghcr.io/marineyachtradar/mayara-server` container image using host networking for radar multicast discovery.

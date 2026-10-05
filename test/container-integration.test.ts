@@ -315,7 +315,11 @@ interface LoadedPlugin {
 
 async function loadPlugin(
   initialConfig: Record<string, unknown> = {},
-  appConfig?: MockApp['config']
+  appConfig?: MockApp['config'],
+  // Fake timers from start() on, for tests that watch the reconnect cadence:
+  // the shortest valid reconnect interval is a second. They switch on after
+  // the import above, which needs real I/O.
+  { fakeTimers = false }: { fakeTimers?: boolean } = {}
 ): Promise<LoadedPlugin> {
   const containers = makeMockContainerManager()
   globalThis.__signalk_containerManager = containers
@@ -335,6 +339,7 @@ async function loadPlugin(
   const router = makeRouter()
   plugin.registerWithRouter(router)
 
+  if (fakeTimers) vi.useFakeTimers()
   plugin.start({
     managedContainer: true,
     mayaraVersion: 'latest',
@@ -353,7 +358,8 @@ async function loadPlugin(
 
   // Let asyncStart's microtask chain run. The mocked MayaraClient.getRadars
   // resolves with {} immediately, so the chain settles in a few ticks.
-  await new Promise<void>((resolve) => setTimeout(resolve, 50))
+  if (fakeTimers) await vi.advanceTimersByTimeAsync(50)
+  else await new Promise<void>((resolve) => setTimeout(resolve, 50))
 
   return { plugin, app, containers, router }
 }
@@ -386,6 +392,7 @@ afterEach(() => {
   // Each test calls plugin.stop() explicitly; this is a safety net to
   // make sure the global doesn't leak across tests.
   delete (globalThis as { __signalk_containerManager?: unknown }).__signalk_containerManager
+  vi.useRealTimers()
 })
 
 describe('mayara-server-signalk-plugin container integration', () => {
@@ -1328,14 +1335,14 @@ describe('mayara-server-signalk-plugin container integration', () => {
         kind: 'requests-disabled'
       })
 
-      // Tiny reconnect interval so several recovery attempts fire quickly.
-      const { plugin } = await loadPlugin({
-        requestSignalkToken: true,
-        reconnectInterval: 0.01
-      })
+      const { plugin } = await loadPlugin(
+        { requestSignalkToken: true, reconnectInterval: 1 },
+        undefined,
+        { fakeTimers: true }
+      )
 
       // Let a few recovery cycles run.
-      await new Promise<void>((resolve) => setTimeout(resolve, 80))
+      await vi.advanceTimersByTimeAsync(3000)
       expect(vi.mocked(tokenModule.beginTokenRequest).mock.calls.length).toBeGreaterThan(1)
       await plugin.stop()
     })
@@ -1346,15 +1353,16 @@ describe('mayara-server-signalk-plugin container integration', () => {
         kind: 'requests-disabled'
       })
 
-      const { plugin } = await loadPlugin({
-        requestSignalkToken: true,
-        reconnectInterval: 0.01
-      })
+      const { plugin } = await loadPlugin(
+        { requestSignalkToken: true, reconnectInterval: 1 },
+        undefined,
+        { fakeTimers: true }
+      )
       await plugin.stop()
       const countAfterStop = vi.mocked(tokenModule.beginTokenRequest).mock.calls.length
 
       // No further attempts should accrue after stop() flips the cancel flag.
-      await new Promise<void>((resolve) => setTimeout(resolve, 80))
+      await vi.advanceTimersByTimeAsync(3000)
       expect(vi.mocked(tokenModule.beginTokenRequest).mock.calls.length).toBe(countAfterStop)
     })
 
@@ -1398,10 +1406,12 @@ describe('mayara-server-signalk-plugin container integration', () => {
         kind: 'already-pending'
       })
 
-      const { plugin, app } = await loadPlugin({
-        requestSignalkToken: true,
-        reconnectInterval: 0.01
-      })
+      const { plugin, app } = await loadPlugin(
+        { requestSignalkToken: true, reconnectInterval: 1 },
+        undefined,
+        { fakeTimers: true }
+      )
+      await vi.advanceTimersByTimeAsync(3000)
       // It surfaces "awaiting approval" and waits — it does NOT call
       // awaitApproval on a non-existent href, and recovery just re-checks.
       expect(app.setPluginStatus).toHaveBeenCalledWith(
@@ -1432,10 +1442,11 @@ describe('mayara-server-signalk-plugin container integration', () => {
           })
       )
 
-      const { plugin } = await loadPlugin({
-        requestSignalkToken: true,
-        reconnectInterval: 0.01
-      })
+      const { plugin } = await loadPlugin(
+        { requestSignalkToken: true, reconnectInterval: 1 },
+        undefined,
+        { fakeTimers: true }
+      )
 
       // Restart: stop() then start() bump the generation twice. The original
       // loop's awaitApproval is now cancelled and must not resume/re-POST.
@@ -1452,10 +1463,32 @@ describe('mayara-server-signalk-plugin container integration', () => {
         discoveryPollInterval: 10,
         reconnectInterval: 5
       })
-      await new Promise((resolve) => setTimeout(resolve, 80))
+      await vi.advanceTimersByTimeAsync(3000)
 
       // The superseded loop exited rather than looping into more POSTs.
       expect(vi.mocked(tokenModule.beginTokenRequest).mock.calls.length).toBe(callsAfterRestart)
+      await plugin.stop()
+    })
+  })
+
+  describe('invalid stored settings', () => {
+    it('replaces an invalid setting with its default, logs it and flags it in the status', async () => {
+      const { plugin, app } = await loadPlugin({ discoveryPollInterval: -5 })
+      expect(app.error).toHaveBeenCalledWith(
+        'Setting discoveryPollInterval: -5 must be >= 5; using the default, 10'
+      )
+      const statuses = app.setPluginStatus.mock.calls.map((c) => c[0] as string)
+      expect(statuses).toContain(
+        'Connected - 0 radar(s) · invalid settings replaced by defaults: discoveryPollInterval'
+      )
+      await plugin.stop()
+    })
+
+    it('adds nothing to the status for a valid configuration', async () => {
+      const { plugin, app } = await loadPlugin()
+      expect(app.error).not.toHaveBeenCalled()
+      const statuses = app.setPluginStatus.mock.calls.map((c) => c[0] as string)
+      expect(statuses).toContain('Connected - 0 radar(s)')
       await plugin.stop()
     })
   })
