@@ -1,28 +1,7 @@
+import type { Context, Delta, Path, PathValue } from '@signalk/server-api'
 import type { PresetName } from './zones.js'
 
-/**
- * The contact a sensor plugin reports to the Signal K Targets API
- * (`app.updateTargetContact`). Mirrored here because the API is newer than the
- * `@signalk/server-api` this plugin builds against; servers without it simply
- * lack the methods.
- */
-export interface TargetContact {
-  id: string
-  type: string
-  position: { latitude: number; longitude: number }
-  courseOverGroundTrue?: number
-  speedOverGround?: number
-  ref?: string
-}
-
-/** The Targets API surface on `app`, absent on servers that predate it. */
-export interface TargetsApiHost {
-  updateTargetContact?: (contact: TargetContact) => void
-  removeTargetContact?: (id: string) => void
-  getTargets?: () => unknown[]
-}
-
-// mayara numbers its ARPA targets, so the last `-` of a contact id always
+// mayara numbers its ARPA targets, so the last `-` of a target id always
 // separates the radar id from the target number.
 const TARGET_PATH = /^radars\.([^.]+)\.targets\.(\d+)$/
 
@@ -31,25 +10,21 @@ function isNumber(v: unknown): v is number {
 }
 
 /**
- * The server names a target without AIS `radar:<contact id>`. Joining with
- * `-` keeps that clear of `radar:<radarId>:<n>`, the path this plugin's own
- * radar alarms use, so the two plugins never write the same notification.
+ * The `targets.*` context of an ARPA target. Joining with `-` keeps it clear
+ * of `radar:<radarId>:<n>`, the key this plugin's own radar alarms use, so a
+ * collision alarm plugin keying its alarms by context never writes the same
+ * notification.
  */
-function contactId(radarId: string, id: string): string {
-  return `${radarId}-${id}`
+export function targetContext(radarId: string, id: string): string {
+  return `targets.radar:${radarId}-${id}`
 }
 
 /**
- * A mayara ARPA target as a Targets API contact, or null when it is lost or
- * has no geographic position yet. Unlike a collision alarm, a contact does not
- * need a CPA: the server only needs to know where the target is.
+ * The values a mayara ARPA target is published with, or null when it is lost
+ * or has no geographic position yet. No CPA is needed: consumers only need to
+ * know where the target is and how it moves.
  */
-export function toContact(
-  radarId: string,
-  id: string,
-  value: unknown,
-  selfContext: string
-): TargetContact | null {
+export function targetValues(value: unknown): PathValue[] | null {
   if (!value || typeof value !== 'object') {
     return null
   }
@@ -63,33 +38,31 @@ export function toContact(
     return null
   }
   const { course, speed } = t.motion ?? {}
-  return {
-    id: contactId(radarId, id),
-    type: 'radar',
-    position: { latitude, longitude },
-    ...(isNumber(course) && { courseOverGroundTrue: course }),
-    ...(isNumber(speed) && { speedOverGround: speed }),
-    ref: `${selfContext}.radars.${radarId}.targets.${id}`
-  }
+  return [
+    { path: 'navigation.position' as Path, value: { latitude, longitude } },
+    ...(isNumber(course)
+      ? [{ path: 'navigation.courseOverGroundTrue' as Path, value: course }]
+      : []),
+    ...(isNumber(speed) ? [{ path: 'navigation.speedOverGround' as Path, value: speed }] : [])
+  ]
 }
 
 /**
- * Reports mayara's ARPA targets to the server's Targets API, which links each
- * one to the AIS vessel it is (if any) so a collision alarm plugin sees one
- * boat once.
+ * Publishes mayara's ARPA targets as `targets.radar:<radarId>-<n>` contexts,
+ * where chart plotters, collision alarms and a fusion plugin that links them
+ * to their AIS vessels find them like any other Signal K data.
  *
- * Targets are timed out on the local clock, like the radar collision alarms,
- * because a standalone mayara's clock need not match this server's.
+ * Updates carry no timestamp, so the server stamps them on its own clock: a
+ * standalone mayara's clock need not match it. For the same reason targets
+ * are timed out on the local clock.
  */
-export class TargetContactReporter {
+export class RadarTargetPublisher {
   private readonly lastSeen = new Map<string, number>()
   private readonly now: () => number
 
   constructor(
-    private readonly host: Required<
-      Pick<TargetsApiHost, 'updateTargetContact' | 'removeTargetContact'>
-    >,
-    private readonly options: { selfContext: string; maxAge: number; now?: () => number }
+    private readonly publish: (delta: Delta) => void,
+    private readonly options: { maxAge: number; now?: () => number }
   ) {
     this.now = options.now ?? Date.now
   }
@@ -101,60 +74,51 @@ export class TargetContactReporter {
       return
     }
     const [, radarId, id] = match
-    const contact = toContact(radarId, id, value, this.options.selfContext)
-    if (!contact) {
-      this.remove(contactId(radarId, id))
+    const context = targetContext(radarId, id)
+    const values = targetValues(value)
+    if (!values) {
+      this.lose(context)
       return
     }
-    this.host.updateTargetContact(contact)
-    this.lastSeen.set(contact.id, this.now())
+    this.send(context, values)
+    this.lastSeen.set(context, this.now())
   }
 
-  /** Withdraw targets mayara stopped reporting (radar off, mayara unreachable). */
+  /** Lose targets mayara stopped reporting (radar off, mayara unreachable). */
   expire(): void {
     const cutoff = this.now() - this.options.maxAge
-    for (const [id, seen] of this.lastSeen) {
+    for (const [context, seen] of this.lastSeen) {
       if (seen < cutoff) {
-        this.remove(id)
+        this.lose(context)
       }
     }
   }
 
   stop(): void {
-    for (const id of [...this.lastSeen.keys()]) {
-      this.remove(id)
+    for (const context of [...this.lastSeen.keys()]) {
+      this.lose(context)
     }
   }
 
-  private remove(id: string): void {
-    if (this.lastSeen.delete(id)) {
-      this.host.removeTargetContact(id)
+  /** A null position tells consumers the track is gone. */
+  private lose(context: string): void {
+    if (this.lastSeen.delete(context)) {
+      this.send(context, [{ path: 'navigation.position' as Path, value: null }])
     }
+  }
+
+  private send(context: string, values: PathValue[]): void {
+    this.publish({ context: context as Context, updates: [{ values }] })
   }
 }
 
 /**
  * The preset this plugin raises radar alarms with. The collision alerts
  * plugin takes them over only when the user says so, since it may not be
- * installed; on a server without the Targets API it cannot see radar targets,
- * so they stay here at the default preset rather than reaching no one.
+ * installed and a missing alarm is worse than a duplicate one.
  */
 export function radarAlarmPreset(
-  setting: PresetName | 'off' | 'collision-alerts-plugin',
-  hasTargetsApi: boolean
+  setting: PresetName | 'off' | 'collision-alerts-plugin'
 ): PresetName | 'off' {
-  if (setting !== 'collision-alerts-plugin') {
-    return setting
-  }
-  return hasTargetsApi ? 'off' : 'coastal'
-}
-
-/** The host's Targets API when the server has one. */
-export function targetsApiOf(
-  app: TargetsApiHost
-): Required<Pick<TargetsApiHost, 'updateTargetContact' | 'removeTargetContact'>> | null {
-  const { updateTargetContact, removeTargetContact } = app
-  return updateTargetContact && removeTargetContact
-    ? { updateTargetContact, removeTargetContact }
-    : null
+  return setting === 'collision-alerts-plugin' ? 'off' : setting
 }

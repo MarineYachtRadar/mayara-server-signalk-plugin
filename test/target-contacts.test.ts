@@ -1,12 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
+import type { Delta } from '@signalk/server-api'
 import {
-  TargetContactReporter,
+  RadarTargetPublisher,
   radarAlarmPreset,
-  targetsApiOf,
-  toContact
+  targetValues
 } from '../src/collision/target-contacts.js'
-
-const SELF = 'vessels.urn:mrn:signalk:uuid:self'
 
 /** A mayara ARPA target as it appears on mayara's v1 stream. */
 function target(overrides: Record<string, unknown> = {}) {
@@ -22,118 +20,121 @@ function target(overrides: Record<string, unknown> = {}) {
 
 function setup() {
   let now = 0
-  const updateTargetContact = vi.fn()
-  const removeTargetContact = vi.fn()
-  const reporter = new TargetContactReporter(
-    { updateTargetContact, removeTargetContact },
-    { selfContext: SELF, maxAge: 30_000, now: () => now }
-  )
+  const publish = vi.fn<(delta: Delta) => void>()
+  const publisher = new RadarTargetPublisher(publish, { maxAge: 30_000, now: () => now })
+  /** What each delta said: context and the paths it set. */
+  const published = () =>
+    publish.mock.calls.map(([delta]) => [
+      delta.context,
+      Object.fromEntries(
+        delta.updates.flatMap((u) => ('values' in u ? u.values : [])).map((v) => [v.path, v.value])
+      )
+    ])
   return {
-    reporter,
-    updateTargetContact,
-    removeTargetContact,
+    publisher,
+    publish,
+    published,
     advanceClock: (ms: number) => {
       now += ms
     }
   }
 }
 
-describe('toContact', () => {
-  it('maps an ARPA target to a radar contact', () => {
-    expect(toContact('radar-0', '7', target(), SELF)).toEqual({
-      id: 'radar-0-7',
-      type: 'radar',
-      position: { latitude: 52.0135, longitude: 4 },
-      courseOverGroundTrue: Math.PI,
-      speedOverGround: 5,
-      ref: `${SELF}.radars.radar-0.targets.7`
-    })
+describe('targetValues', () => {
+  it('maps an ARPA target to the paths a vessel uses', () => {
+    expect(targetValues(target())).toEqual([
+      { path: 'navigation.position', value: { latitude: 52.0135, longitude: 4 } },
+      { path: 'navigation.courseOverGroundTrue', value: Math.PI },
+      { path: 'navigation.speedOverGround', value: 5 }
+    ])
   })
 
-  it('reports a target before mayara knows its motion', () => {
-    const contact = toContact('radar-0', '7', target({ motion: undefined }), SELF)
-    expect(contact?.position).toEqual({ latitude: 52.0135, longitude: 4 })
-    expect(contact).not.toHaveProperty('speedOverGround')
+  it('publishes a target before mayara knows its motion', () => {
+    expect(targetValues(target({ motion: undefined }))).toEqual([
+      { path: 'navigation.position', value: { latitude: 52.0135, longitude: 4 } }
+    ])
   })
 
-  it('has no contact for a lost target or one without a position', () => {
-    expect(toContact('radar-0', '7', target({ status: 'lost' }), SELF)).toBeNull()
-    expect(
-      toContact('radar-0', '7', target({ position: { bearing: 0, distance: 1500 } }), SELF)
-    ).toBeNull()
-    expect(toContact('radar-0', '7', null, SELF)).toBeNull()
+  it('has nothing for a lost target or one without a position', () => {
+    expect(targetValues(target({ status: 'lost' }))).toBeNull()
+    expect(targetValues(target({ position: { bearing: 0, distance: 1500 } }))).toBeNull()
+    expect(targetValues(null)).toBeNull()
   })
 })
 
-describe('TargetContactReporter', () => {
-  it('reports ARPA targets and ignores other radar paths', () => {
-    const { reporter, updateTargetContact } = setup()
-    reporter.update('radars.radar-0.controls.gain', { value: 50 })
-    reporter.update('radars.radar-0.targets.7', target())
-    expect(updateTargetContact).toHaveBeenCalledTimes(1)
-    expect(updateTargetContact.mock.calls[0][0]).toMatchObject({ id: 'radar-0-7' })
+describe('RadarTargetPublisher', () => {
+  it('publishes ARPA targets under targets.* and ignores other radar paths', () => {
+    const { publisher, published } = setup()
+    publisher.update('radars.radar-0.controls.gain', { value: 50 })
+    publisher.update('radars.radar-0.targets.7', target())
+    expect(published()).toEqual([
+      [
+        'targets.radar:radar-0-7',
+        {
+          'navigation.position': { latitude: 52.0135, longitude: 4 },
+          'navigation.courseOverGroundTrue': Math.PI,
+          'navigation.speedOverGround': 5
+        }
+      ]
+    ])
   })
 
-  it('gives radars whose ids contain a dash distinct contact ids', () => {
-    const { reporter, updateTargetContact, removeTargetContact } = setup()
-    reporter.update('radars.a-1.targets.2', target())
-    reporter.update('radars.a.targets.1-2', target())
-    reporter.update('radars.a.targets.12', target({ status: 'lost' }))
-    expect(updateTargetContact).toHaveBeenCalledTimes(1)
-    expect(updateTargetContact.mock.calls[0][0]).toMatchObject({ id: 'a-1-2' })
-    expect(removeTargetContact).not.toHaveBeenCalled()
+  it('leaves the timestamp to the server clock', () => {
+    const { publisher, publish } = setup()
+    publisher.update('radars.radar-0.targets.7', target())
+    expect(publish.mock.calls[0][0].updates[0]).not.toHaveProperty('timestamp')
   })
 
-  it('withdraws a target mayara reports lost', () => {
-    const { reporter, removeTargetContact } = setup()
-    reporter.update('radars.radar-0.targets.7', target())
-    reporter.update('radars.radar-0.targets.7', null)
-    reporter.update('radars.radar-0.targets.7', null)
-    expect(removeTargetContact).toHaveBeenCalledTimes(1)
-    expect(removeTargetContact).toHaveBeenCalledWith('radar-0-7')
+  it('gives radars whose ids contain a dash distinct contexts', () => {
+    const { publisher, published } = setup()
+    publisher.update('radars.a-1.targets.2', target())
+    publisher.update('radars.a.targets.1-2', target())
+    publisher.update('radars.a.targets.12', target({ status: 'lost' }))
+    expect(published().map(([context]) => context)).toEqual(['targets.radar:a-1-2'])
   })
 
-  it('withdraws targets mayara stopped reporting', () => {
-    const { reporter, removeTargetContact, advanceClock } = setup()
-    reporter.update('radars.radar-0.targets.7', target())
+  it('publishes a null position once for a target mayara reports lost', () => {
+    const { publisher, published } = setup()
+    publisher.update('radars.radar-0.targets.7', target())
+    publisher.update('radars.radar-0.targets.7', null)
+    publisher.update('radars.radar-0.targets.7', null)
+    expect(published().slice(1)).toEqual([
+      ['targets.radar:radar-0-7', { 'navigation.position': null }]
+    ])
+  })
+
+  it('loses targets mayara stopped reporting', () => {
+    const { publisher, published, advanceClock } = setup()
+    publisher.update('radars.radar-0.targets.7', target())
     advanceClock(20_000)
-    reporter.update('radars.radar-0.targets.8', target())
+    publisher.update('radars.radar-0.targets.8', target())
     advanceClock(15_000)
-    reporter.expire()
-    expect(removeTargetContact.mock.calls).toEqual([['radar-0-7']])
+    publisher.expire()
+    expect(published().slice(2)).toEqual([
+      ['targets.radar:radar-0-7', { 'navigation.position': null }]
+    ])
   })
 
-  it('withdraws everything when stopped', () => {
-    const { reporter, removeTargetContact } = setup()
-    reporter.update('radars.radar-0.targets.7', target())
-    reporter.update('radars.radar-1.targets.2', target())
-    reporter.stop()
-    expect(removeTargetContact.mock.calls).toEqual([['radar-0-7'], ['radar-1-2']])
-  })
-})
-
-describe('targetsApiOf', () => {
-  it('is null on servers without the Targets API', () => {
-    expect(targetsApiOf({})).toBeNull()
-  })
-
-  it('returns the contact methods when the server has them', () => {
-    const api = { updateTargetContact: vi.fn(), removeTargetContact: vi.fn() }
-    expect(targetsApiOf(api)).toEqual(api)
+  it('loses everything when stopped', () => {
+    const { publisher, published } = setup()
+    publisher.update('radars.radar-0.targets.7', target())
+    publisher.update('radars.radar-1.targets.2', target())
+    publisher.stop()
+    expect(
+      published()
+        .slice(2)
+        .map(([context]) => context)
+    ).toEqual(['targets.radar:radar-0-7', 'targets.radar:radar-1-2'])
   })
 })
 
 describe('radarAlarmPreset', () => {
   it('keeps radar alarms here unless the user hands them over', () => {
-    expect(radarAlarmPreset('coastal', true)).toBe('coastal')
-    expect(radarAlarmPreset('off', true)).toBe('off')
+    expect(radarAlarmPreset('coastal')).toBe('coastal')
+    expect(radarAlarmPreset('off')).toBe('off')
   })
 
-  it('leaves radar alarms to the collision alerts plugin on a Targets API server', () => {
-    expect(radarAlarmPreset('collision-alerts-plugin', true)).toBe('off')
-  })
-
-  it('falls back to coastal when the server cannot pass radar targets on', () => {
-    expect(radarAlarmPreset('collision-alerts-plugin', false)).toBe('coastal')
+  it('leaves radar alarms to the collision alerts plugin when asked', () => {
+    expect(radarAlarmPreset('collision-alerts-plugin')).toBe('off')
   })
 })
