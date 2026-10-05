@@ -172,7 +172,7 @@ describe('createGuiProxy', () => {
     expect(up.seen[0].headers['x-forwarded-proto']).toBe('http')
   })
 
-  it('streams a response it does not rewrite unchanged, compression included', async () => {
+  it('streams a response through unchanged, compression included', async () => {
     const zipped = gzipSync('console.log("radar")')
     const up = await upstream((_req, res) => {
       res.writeHead(200, { 'content-type': 'text/javascript', 'content-encoding': 'gzip' })
@@ -215,91 +215,6 @@ describe('createGuiProxy', () => {
     })
 
     expect(up.seen[0].body).toBe('raw recording bytes')
-  })
-
-  describe('with a JSON rewriter', () => {
-    const list = {
-      version: '3',
-      radars: { r1: { streamUrl: 'ws://mayara:6502/signalk/v2/api/vessels/self/radars/r1' } }
-    }
-    const rewriter: GuiProxyOptions['jsonRewriter'] = (path) =>
-      path.startsWith('/signalk/v2/api/vessels/self/radars')
-        ? (body) => {
-            const json = body as typeof list
-            json.radars.r1.streamUrl = '/rewritten'
-            return json
-          }
-        : undefined
-
-    it('rewrites the JSON and its Content-Length', async () => {
-      const up = await upstream((_req, res) => {
-        res.writeHead(200, { 'content-type': 'application/json' })
-        res.end(JSON.stringify(list))
-      })
-      const port = await front({ target: () => up.origin, jsonRewriter: rewriter })
-
-      const reply = await request(port, '/signalk/v2/api/vessels/self/radars', {
-        headers: { 'accept-encoding': 'gzip, br' }
-      })
-
-      // Asked for an uncompressed body, so there is JSON to parse.
-      expect(up.seen[0].headers['accept-encoding']).toBeUndefined()
-      expect(JSON.parse(reply.body.toString())).toEqual({
-        version: '3',
-        radars: { r1: { streamUrl: '/rewritten' } }
-      })
-      expect(reply.headers['content-length']).toBe(String(reply.body.length))
-    })
-
-    it('keeps the encoding of other paths', async () => {
-      const up = await upstream()
-      const port = await front({ target: () => up.origin, jsonRewriter: rewriter })
-
-      await request(port, '/viewer.js', { headers: { 'accept-encoding': 'gzip' } })
-
-      expect(up.seen[0].headers['accept-encoding']).toBe('gzip')
-    })
-
-    it('passes a body that is not JSON through untouched', async () => {
-      const up = await upstream((_req, res) => {
-        res.writeHead(200, { 'content-type': 'application/json' })
-        res.end('not json')
-      })
-      const port = await front({ target: () => up.origin, jsonRewriter: rewriter })
-
-      const reply = await request(port, '/signalk/v2/api/vessels/self/radars')
-
-      expect(reply.status).toBe(200)
-      expect(reply.body.toString()).toBe('not json')
-    })
-
-    it('drops the client connection when the upstream breaks off mid-body', async () => {
-      const up = await upstream((_req, res) => {
-        res.writeHead(200, { 'content-type': 'application/json', 'content-length': '1000' })
-        res.write('{"version":')
-        setTimeout(() => res.socket?.destroy(), 20)
-      })
-      const port = await front({ target: () => up.origin, jsonRewriter: rewriter })
-
-      await expect(request(port, '/signalk/v2/api/vessels/self/radars')).rejects.toThrow(
-        /socket hang up|ECONNRESET/
-      )
-    })
-
-    it('relays a bodyless status without inventing a body', async () => {
-      const up = await upstream((_req, res) => {
-        res.writeHead(204)
-        res.end()
-      })
-      const port = await front({ target: () => up.origin, jsonRewriter: rewriter })
-
-      const reply = await request(port, '/signalk/v2/api/vessels/self/radars/r1/controls/gain', {
-        method: 'PUT'
-      })
-
-      expect(reply.status).toBe(204)
-      expect(reply.body.length).toBe(0)
-    })
   })
 
   it('answers 504 when the target is unreachable', async () => {

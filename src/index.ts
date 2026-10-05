@@ -283,21 +283,6 @@ export default function (app: MayaraServerAPI): Plugin {
       // The proxy resolves its target on every request, so changes to
       // host/port in the plugin config take effect without restarting
       // the plugin (matches the live read in /api/gui-url).
-      // Rewrite the absolute `ws://host:port/...` URLs mayara puts in
-      // its radar-list JSON to same-origin paths the browser can reach
-      // via this proxy. control.js opens `new WebSocket(streamUrl)` on
-      // the value verbatim, so without this the GUI would try to talk
-      // directly to mayara's port (defeating the whole point).
-      const rewriteStreamUrl = (raw: string): string => {
-        try {
-          const u = new URL(raw)
-          // Map mayara's /signalk/... paths to /plugins/<id>/gui/signalk/...
-          // (the `/gui` mount is where ws-upgrade dispatch hooks in).
-          return `${GUI_PROXY_PATH}${u.pathname}${u.search}`
-        } catch {
-          return raw
-        }
-      }
 
       // mayara base URL for the GUI's own assets and mayara-specific endpoints.
       const mayaraBase = (): string => {
@@ -305,19 +290,6 @@ export default function (app: MayaraServerAPI): Plugin {
         const port = currentSettings?.port ?? 6502
         const proto = currentSettings?.secure ? 'https' : 'http'
         return `${proto}://${host}:${port}`
-      }
-
-      // mayara's list is the `{ version, radars }` envelope (matching the
-      // signalk-server Radar API); tolerate a bare keyed map too.
-      const rewriteRadarList = (parsed: unknown): unknown => {
-        type RadarEntry = { streamUrl?: string; spokeDataUrl?: string }
-        const json = parsed as { radars?: Record<string, RadarEntry> } & Record<string, RadarEntry>
-        const radars: Record<string, RadarEntry> = json.radars ?? json
-        for (const radar of Object.values(radars)) {
-          if (radar.streamUrl) radar.streamUrl = rewriteStreamUrl(radar.streamUrl)
-          if (radar.spokeDataUrl) radar.spokeDataUrl = rewriteStreamUrl(radar.spokeDataUrl)
-        }
-        return parsed
       }
 
       const guiProxy = createGuiProxy({
@@ -336,11 +308,7 @@ export default function (app: MayaraServerAPI): Plugin {
             return `${httpScheme}://127.0.0.1:${sk.port}`
           }
           return mayaraBase()
-        },
-        // Only the radar list carries stream URLs. Everything else (HTML, JS,
-        // CSS, binary images, other JSON) streams through untouched.
-        jsonRewriter: (path) =>
-          path.includes('/signalk/v2/api/vessels/self/radars') ? rewriteRadarList : undefined
+        }
       })
 
       // WebSocket upgrades fire at the Node HTTP-server level, not
