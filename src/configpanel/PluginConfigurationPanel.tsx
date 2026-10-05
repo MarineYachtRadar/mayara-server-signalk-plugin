@@ -910,7 +910,7 @@ export default function PluginConfigurationPanel({
           <span style={S.hint}>
             {directGuiUrl
               ? "The browser needs to reach mayara-server's port"
-              : 'Through Signal K: only its port needs to be open, and the GUI uses its TLS'}
+              : 'Through Signal K: only its port needs to be open, and the GUI uses HTTPS when Signal K does'}
           </span>
         </div>
 
