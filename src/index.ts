@@ -3,18 +3,12 @@ import { Request, Response, IRouter } from 'express'
 import { type IncomingMessage } from 'http'
 import { Server as NetServer, type Socket } from 'net'
 import {
-  createProxyMiddleware,
-  fixRequestBody,
-  responseInterceptor,
-  type RequestHandler
-} from 'http-proxy-middleware'
-import {
   getContainerManager as helperGetContainerManager,
   waitForContainerManager,
   isValidImageTag
 } from 'signalk-container-helper'
 import { MayaraClient } from './mayara-client.js'
-import { rewriteGuiProxyPath } from './gui-proxy-path.js'
+import { createGuiProxy } from './gui-proxy.js'
 import { createRadarProvider } from './radar-provider.js'
 import { SpokeForwarder } from './spoke-forwarder.js'
 import { DeltaForwarder } from './delta-forwarder.js'
@@ -286,10 +280,9 @@ export default function (app: MayaraServerAPI): Plugin {
       // works without mixed content and only the SK port needs to be
       // open externally.
       //
-      // `router` flag rewriter resolves the target on every request,
-      // so changes to host/port in the plugin config take effect
-      // without restarting the plugin (matches the live read in
-      // /api/gui-url).
+      // The proxy resolves its target on every request, so changes to
+      // host/port in the plugin config take effect without restarting
+      // the plugin (matches the live read in /api/gui-url).
       // Rewrite the absolute `ws://host:port/...` URLs mayara puts in
       // its radar-list JSON to same-origin paths the browser can reach
       // via this proxy. control.js opens `new WebSocket(streamUrl)` on
@@ -314,8 +307,21 @@ export default function (app: MayaraServerAPI): Plugin {
         return `${proto}://${host}:${port}`
       }
 
-      const guiProxy: RequestHandler = createProxyMiddleware({
-        router: (req: IncomingMessage) => {
+      // mayara's list is the `{ version, radars }` envelope (matching the
+      // signalk-server Radar API); tolerate a bare keyed map too.
+      const rewriteRadarList = (parsed: unknown): unknown => {
+        type RadarEntry = { streamUrl?: string; spokeDataUrl?: string }
+        const json = parsed as { radars?: Record<string, RadarEntry> } & Record<string, RadarEntry>
+        const radars: Record<string, RadarEntry> = json.radars ?? json
+        for (const radar of Object.values(radars)) {
+          if (radar.streamUrl) radar.streamUrl = rewriteStreamUrl(radar.streamUrl)
+          if (radar.spokeDataUrl) radar.spokeDataUrl = rewriteStreamUrl(radar.spokeDataUrl)
+        }
+        return parsed
+      }
+
+      const guiProxy = createGuiProxy({
+        target: (path) => {
           // Radar data — the radar REST API, the control stream, and the spoke
           // stream — is all served under `/signalk/...` by the Signal K server
           // this plugin registered with. Point those requests at the local SK
@@ -324,7 +330,6 @@ export default function (app: MayaraServerAPI): Plugin {
           // own static assets and mayara-specific `/v2` recordings/debug) goes to
           // mayara. Requests carry the `/plugins/<id>/gui` mount stripped, so the
           // path here is e.g. `/signalk/v2/...` or `/viewer.js`.
-          const path = req.url ?? ''
           if (path === '/signalk' || path.startsWith('/signalk/')) {
             const sk = resolveSignalkLoopback()
             const httpScheme = sk.scheme === 'wss' ? 'https' : 'http'
@@ -332,77 +337,10 @@ export default function (app: MayaraServerAPI): Plugin {
           }
           return mayaraBase()
         },
-        // `router.use('/gui', guiProxy)` strips the `/gui` prefix
-        // before the middleware sees the request, so the proxy
-        // receives paths like `/` (for the GUI root) and
-        // `/signalk/v2/api/...` (for the WebSocket-emitting REST API).
-        // mayara-server serves its UI at `/gui/...` but its API at
-        // `/signalk/...` and `/v2/...`. `rewriteGuiProxyPath` passes both
-        // API roots through and only prefixes genuine assets with `/gui`.
-        target: 'http://localhost:6502', // overridden by `router`
-        changeOrigin: true,
-        // Accept the Signal K loopback's self-signed cert when SK runs on https
-        // (the token flow connects the same way). No-op for the http targets.
-        secure: false,
-        // Do NOT let the middleware auto-subscribe to the server's `upgrade`
-        // event. It would see the raw `/plugins/<id>/gui/signalk/...` URL,
-        // which `pathRewrite` can't strip the mount prefix from (it only
-        // knows `/signalk/` vs not), so the upgrade reaches mayara at a bogus
-        // `/gui/...` path and 404s. The manual `upgradeListener` below strips
-        // the prefix first, then calls `guiProxy.upgrade()`. With `ws: true`
-        // that manual call is a no-op (it guards on `wsInternalSubscribed`),
-        // so the two handlers fight and the wrong one wins. Keep this false.
-        ws: false,
-        xfwd: true,
-        followRedirects: false,
-        pathRewrite: rewriteGuiProxyPath,
-        selfHandleResponse: true,
-        on: {
-          // Signal K mounts `express.json()` before the plugin router
-          // for its own /signalk/v1/... handlers, so by the time a
-          // PUT/POST reaches our proxy the original request stream
-          // has already been drained into `req.body`. http-proxy then
-          // opens the upstream socket, copies the `Content-Length`
-          // header from the incoming request, but has no bytes to
-          // pipe — mayara waits for the body that never arrives and
-          // the connection hangs until the client times out. The
-          // visible symptom: every radar control PUT (power, gain,
-          // range, sea, rain, …) from the GUI fails with HTTP 000
-          // / "fetch failed", radar stays in standby. fixRequestBody
-          // re-serializes `req.body` (when present) and writes it to
-          // the upstream ClientRequest with a corrected Content-Length.
-          // For GET / HEAD it's a no-op (req.body is undefined).
-          proxyReq: fixRequestBody,
-          proxyRes: responseInterceptor((buffer, proxyRes, req) => {
-            const ct = proxyRes.headers['content-type'] ?? ''
-            // Only the radar-list JSON contains stream URLs we need
-            // to rewrite. Everything else (HTML, JS, CSS, binary
-            // images, other JSON) passes through untouched.
-            if (
-              ct.includes('application/json') &&
-              req.url?.includes('/signalk/v2/api/vessels/self/radars')
-            ) {
-              try {
-                const parsed: unknown = JSON.parse(buffer.toString('utf8'))
-                // mayara's list is the `{ version, radars }` envelope (matching
-                // the signalk-server Radar API); tolerate a bare keyed map too.
-                type RadarEntry = { streamUrl?: string; spokeDataUrl?: string }
-                const json = parsed as {
-                  radars?: Record<string, RadarEntry>
-                } & Record<string, RadarEntry>
-                const radars: Record<string, RadarEntry> = json.radars ?? json
-                for (const radar of Object.values(radars)) {
-                  if (radar.streamUrl) radar.streamUrl = rewriteStreamUrl(radar.streamUrl)
-                  if (radar.spokeDataUrl) radar.spokeDataUrl = rewriteStreamUrl(radar.spokeDataUrl)
-                }
-                return Promise.resolve(JSON.stringify(parsed))
-              } catch {
-                return Promise.resolve(buffer)
-              }
-            }
-            return Promise.resolve(buffer)
-          })
-        }
+        // Only the radar list carries stream URLs. Everything else (HTML, JS,
+        // CSS, binary images, other JSON) streams through untouched.
+        jsonRewriter: (path) =>
+          path.includes('/signalk/v2/api/vessels/self/radars') ? rewriteRadarList : undefined
       })
 
       // WebSocket upgrades fire at the Node HTTP-server level, not
@@ -443,7 +381,7 @@ export default function (app: MayaraServerAPI): Plugin {
                 // Strip the `/plugins/<id>/gui` prefix so the proxy
                 // sees the same path shape as for HTTP requests
                 // (where Express' router.use('/gui', ...) does the
-                // stripping). pathRewrite then handles the
+                // stripping). `rewriteGuiProxyPath` then handles the
                 // `/signalk/` vs `/gui/...` split uniformly.
                 const stripped = upReq.url.slice(GUI_PROXY_PATH.length) || '/'
                 upReq.url = stripped
@@ -461,7 +399,9 @@ export default function (app: MayaraServerAPI): Plugin {
         }
         next()
       })
-      router.use('/gui', guiProxy)
+      router.use('/gui', (req: Request, res: Response) => {
+        guiProxy.web(req, res)
+      })
 
       router.get('/status', async (_req: Request, res: Response) => {
         const containers = getContainerManager()
