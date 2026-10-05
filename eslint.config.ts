@@ -1,8 +1,9 @@
 import eslint from '@eslint/js'
+import { defineConfig } from 'eslint/config'
 import tseslint from 'typescript-eslint'
 import eslintPluginPrettier from 'eslint-plugin-prettier/recommended'
 
-export default tseslint.config(
+export default defineConfig(
   eslint.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
   eslintPluginPrettier,
@@ -52,19 +53,10 @@ export default tseslint.config(
     }
   },
   {
-    // Lint only the TypeScript sources in tsconfig.eslint.json (src + test)
-    // plus the config panel (its own project, configured above). Everything
-    // else is outside a TS project, so the type-aware parser errors on it —
-    // which is what a repo-wide `eslint .` (as CodeRabbit runs) hits on the
-    // root config files.
-    ignores: [
-      'plugin/**',
-      'public/**',
-      'node_modules/**',
-      'build.js',
-      '**/*.config.js',
-      '**/*.config.mjs',
-      '**/*.config.ts'
-    ]
+    // Everything outside a TS project would make the type-aware parser error,
+    // which is what a repo-wide `eslint .` (as CodeRabbit runs) hits. What is
+    // left after these is TypeScript in tsconfig.eslint.json (src, test and
+    // the root tooling) or in the config panel's own project above.
+    ignores: ['plugin/**', 'public/**', 'node_modules/**']
   }
 )

@@ -195,6 +195,8 @@ npm install
 npm run build
 ```
 
+Building needs Node 22.18+ or 24: the build script and the end-to-end harness are TypeScript, which those versions run directly.
+
 ### Scripts
 
 - `npm run format` — prettier + eslint --fix

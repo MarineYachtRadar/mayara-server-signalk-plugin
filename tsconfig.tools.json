@@ -1,0 +1,18 @@
+{
+  // The build, lint and test tooling outside src/: build.ts and the e2e
+  // harness run as TypeScript straight from Node (type stripping), and the
+  // tool configs are loaded by their tools. All of it is type-checked here
+  // (`npm run typecheck:tools`) but never compiled.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    // Node only strips types, so syntax that needs transforming (enums,
+    // namespaces, parameter properties) and type imports not marked
+    // `import type` would fail at runtime rather than here.
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true
+  },
+  "include": ["*.ts", "test/e2e/**/*.ts"],
+  "exclude": ["node_modules"]
+}

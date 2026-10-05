@@ -6,17 +6,18 @@
   "type": "module",
   "signalk-plugin-enabled-by-default": true,
   "scripts": {
-    "format": "prettier --write \"src/**/*.ts\" \"src/**/*.tsx\" \"test/**/*.ts\" && eslint --fix 'src/**/*.ts' 'src/**/*.tsx' 'test/**/*.ts' && npm run format:other",
-    "format:other": "prettier --write \"**/*.md\" \"*.{json,yml,yaml,mjs,js}\" \".github/**/*.{yml,yaml}\"",
-    "format:check": "prettier --check \"src/**/*.ts\" \"src/**/*.tsx\" \"test/**/*.ts\" \"**/*.md\" \"*.{json,yml,yaml,mjs,js}\" \".github/**/*.{yml,yaml}\"",
-    "lint": "eslint 'src/**/*.ts' 'src/**/*.tsx' 'test/**/*.ts'",
-    "build": "tsc && npm run typecheck:panel && node build.js && vite build",
+    "format": "prettier --write \"src/**/*.ts\" \"src/**/*.tsx\" \"test/**/*.ts\" \"*.ts\" && eslint --fix 'src/**/*.ts' 'src/**/*.tsx' 'test/**/*.ts' '*.ts' && npm run format:other",
+    "format:other": "prettier --write \"**/*.md\" \"*.{json,yml,yaml}\" \".github/**/*.{yml,yaml}\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"src/**/*.tsx\" \"test/**/*.ts\" \"*.ts\" \"**/*.md\" \"*.{json,yml,yaml}\" \".github/**/*.{yml,yaml}\"",
+    "lint": "eslint 'src/**/*.ts' 'src/**/*.tsx' 'test/**/*.ts' '*.ts'",
+    "build": "tsc && npm run typecheck:panel && npm run typecheck:tools && node build.ts && vite build",
     "build:config": "vite build",
     "typecheck:panel": "tsc -p src/configpanel --noEmit",
+    "typecheck:tools": "tsc -p tsconfig.tools.json",
     "build:all": "npm run lint && npm run build && npm run test",
     "test": "vitest run",
     "prepublishOnly": "npm run build",
-    "test:e2e": "node test/e2e/run-e2e.mjs"
+    "test:e2e": "node test/e2e/run-e2e.ts"
   },
   "keywords": [
     "signalk-node-server-plugin",
@@ -70,6 +71,7 @@
     "eslint": "^10.3.0",
     "eslint-config-prettier": "^10.0.0",
     "eslint-plugin-prettier": "^5.0.0",
+    "jiti": "^2.7.0",
     "prettier": "^3.0.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",

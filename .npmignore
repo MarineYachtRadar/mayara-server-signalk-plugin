@@ -6,6 +6,7 @@ src/
 test/
 tsconfig.json
 tsconfig.eslint.json
-eslint.config.mjs
-prettier.config.mjs
+tsconfig.tools.json
+eslint.config.ts
+prettier.config.ts
 vitest.config.ts
