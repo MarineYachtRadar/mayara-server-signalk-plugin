@@ -50,7 +50,7 @@ export default defineConfig({
   // `public/` is this plugin's OUTPUT directory (Signal K serves it), not a
   // Vite static-asset source. Leaving publicDir at its default would make Vite
   // try to copy public/ into itself — it warns, and on a clean tree the copy
-  // races the build.js artifacts it just wrote there.
+  // races the build.ts artifacts it just wrote there.
   publicDir: false,
   build: {
     // Federation supplies the real entry (remoteEntry.js); without this
@@ -58,7 +58,7 @@ export default defineConfig({
     rollupOptions: { input: './src/configpanel/index.ts' },
     outDir: 'public',
     // The published package ships public/ alongside the app icon and the
-    // build.js redirect page; wiping the directory would take them with it.
+    // build.ts redirect page; wiping the directory would take them with it.
     emptyOutDir: false,
     target: 'es2022',
     // Module Federation remotes must not be inlined into a single file, and

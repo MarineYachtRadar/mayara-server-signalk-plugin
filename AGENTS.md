@@ -77,15 +77,20 @@ When mayara grows the status model, this plugin must **forward the new fields ve
 
 - `npm run format` — prettier + eslint --fix
 - `npm run lint` — eslint check (no fixes)
-- `npm run build` — tsc → `plugin/`, typecheck the panel, then Vite-build the React config panel
+- `npm run build` — tsc → `plugin/`, typecheck the panel and the tooling, write the `public/` redirect page (`build.ts`), then Vite-build the React config panel
 - `npm run typecheck:panel` — typecheck the browser-side config panel (`src/configpanel/tsconfig.json`)
+- `npm run typecheck:tools` — typecheck the tooling outside `src/` (`build.ts`, the tool configs, the e2e harness) against `tsconfig.tools.json`
 - `npm run test` — vitest
 - `npm run build:all` — lint + build + test (run this before every commit)
 - `npm run test:e2e` — **full-stack check, run by hand** (see below)
 
+### TypeScript tooling
+
+The repo has no JavaScript sources: the build script, the e2e harness and the tool configs are TypeScript too. Node runs `build.ts` and the harness directly by stripping their types, which is on by default from Node 22.18 and in 24, so working on the repo needs one of those. The published plugin is compiled and still runs on the `engines` floor. ESLint loads `eslint.config.ts` through `jiti`, and Prettier loads `prettier.config.ts` natively. `tsconfig.tools.json` type-checks all of it with `erasableSyntaxOnly` and `verbatimModuleSyntax`, so syntax Node cannot strip, or a type import not marked `import type`, fails `npm run build` rather than the script itself.
+
 ### End-to-end harness
 
-`test/e2e/run-e2e.mjs` boots a **real signalk-server** with this plugin really
+`test/e2e/run-e2e.ts` boots a **real signalk-server** with this plugin really
 installed in a throwaway config dir, pointed at a **real mayara-server**. Nothing
 is mocked. It catches the failures the unit tests structurally cannot: the plugin
 failing to load under ESM, the Radar API provider not registering with the
@@ -94,7 +99,7 @@ being served.
 
 It is deliberately **not** part of `npm test`, `build:all` or CI — it needs a
 running mayara-server and, for the radar assertions, actual hardware. The vitest
-glob is `test/**/*.test.ts`, so the `.mjs` harness is excluded automatically.
+glob is `test/**/*.test.ts`, so the harness is excluded automatically.
 
 The harness runs `npm run build` itself before packing, because `npm pack` does
 **not** trigger `prepublishOnly` — without that step it would silently test a
@@ -235,7 +240,7 @@ Three things are load-bearing and easy to break:
   JSX; those must never leak into the Node compile, or server code referencing
   `document` would typecheck clean. Vite does not typecheck, so
   `npm run typecheck:panel` is a separate step wired into `build`.
-  `eslint.config.mjs` points the type-aware parser at that project for
+  `eslint.config.ts` points the type-aware parser at that project for
   `src/configpanel/**`, so the panel is linted under the same
   `strictTypeChecked` rules as the rest of `src/` — it is no longer exempt.
 
@@ -246,7 +251,7 @@ returning `unknown` so each call site has to narrow. Keep new fetches on it.
 
 `publicDir: false` matters too: `public/` is this plugin's _output_ directory
 (Signal K serves it), not a Vite static-asset source — the default would make
-Vite try to copy `public/` into itself and race the `build.js` artifacts.
+Vite try to copy `public/` into itself and race the `build.ts` artifacts.
 
 ### Build artifacts in `plugin/`
 
