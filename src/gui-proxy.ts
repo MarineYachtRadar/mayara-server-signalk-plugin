@@ -1,0 +1,200 @@
+import { ServerResponse, type ClientRequest, type IncomingMessage } from 'node:http'
+import { type Socket } from 'node:net'
+import { stringify as stringifyQuery, type ParsedUrlQueryInput } from 'node:querystring'
+import { createProxyServer, type ProxyServerOptions, type ProxyTargetDetailed } from 'httpxy'
+import { rewriteGuiProxyPath } from './gui-proxy-path.js'
+
+/** An incoming request, possibly already read into `body` by Signal K's body parsers. */
+export type ProxiedRequest = IncomingMessage & { body?: unknown }
+
+/** Rewrites a parsed JSON response body before it reaches the browser. */
+export type JsonRewriter = (body: unknown) => unknown
+
+/**
+ * Paths are as the `/gui` mount hands them over: the `/plugins/<id>/gui`
+ * prefix stripped, before `rewriteGuiProxyPath`.
+ */
+export interface GuiProxyOptions {
+  /** Origin (`http://host:port`) to forward the request to, resolved per request. */
+  target: (path: string) => string
+  /** A rewriter for the JSON responses on `path`; undefined streams them untouched. */
+  jsonRewriter?: (path: string) => JsonRewriter | undefined
+}
+
+export interface GuiProxy {
+  web(req: ProxiedRequest, res: ServerResponse): void
+  upgrade(req: IncomingMessage, socket: Socket, head: Buffer): void
+}
+
+// Framing headers describe the upstream connection, not the buffered body
+// sent on.
+const FRAMING_HEADERS = new Set(['connection', 'keep-alive', 'transfer-encoding', 'trailer'])
+const UNREACHABLE_CODES = new Set(['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'ETIMEDOUT'])
+
+/**
+ * Same-origin reverse proxy for mayara's GUI, its API and its WebSocket
+ * streams, so the browser only ever talks to the Signal K port.
+ */
+export function createGuiProxy(options: GuiProxyOptions): GuiProxy {
+  const proxy = createProxyServer({})
+  const rewriters = new WeakMap<IncomingMessage, JsonRewriter>()
+
+  proxy.on('proxyReq', (proxyReq, req) => {
+    // The rewriter parses the body, so ask upstream not to compress it.
+    if (rewriters.has(req)) proxyReq.removeHeader('accept-encoding')
+    resendParsedBody(proxyReq, req)
+  })
+  proxy.on('proxyRes', (proxyRes, req, res) => {
+    const rewrite = rewriters.get(req)
+    if (rewrite) sendRewritten(proxyRes, req, res, rewrite)
+  })
+  // With a listener attached, httpxy reports failures here instead of
+  // rejecting the web()/ws() promise.
+  proxy.on('error', (err, _req, res) => {
+    fail(err, res)
+  })
+
+  const forwardOptions = (path: string): ProxyServerOptions => ({
+    target: proxyTarget(options.target(path)),
+    changeOrigin: true,
+    // Accept the Signal K loopback's self-signed cert when SK runs on https.
+    secure: false,
+    xfwd: true
+  })
+
+  return {
+    web(req, res) {
+      const path = req.url ?? '/'
+      let opts: ProxyServerOptions
+      try {
+        opts = forwardOptions(path)
+      } catch (err) {
+        fail(err, res)
+        return
+      }
+      const rewrite = options.jsonRewriter?.(path)
+      if (rewrite) rewriters.set(req, rewrite)
+      req.url = rewriteGuiProxyPath(path)
+      proxy
+        .web(req, res, { ...opts, selfHandleResponse: rewrite !== undefined })
+        .catch((err: unknown) => {
+          fail(err, res)
+        })
+    },
+
+    upgrade(req, socket, head) {
+      const path = req.url ?? '/'
+      let opts: ProxyServerOptions
+      try {
+        opts = forwardOptions(path)
+      } catch (err) {
+        fail(err, socket)
+        return
+      }
+      req.url = rewriteGuiProxyPath(path)
+      proxy.ws(req, socket, opts, head).catch((err: unknown) => {
+        fail(err, socket)
+      })
+    }
+  }
+}
+
+/**
+ * httpxy hands a URL's bracketed IPv6 hostname (`[fd00::1]`) to DNS instead
+ * of connecting to the address, so pass the host without brackets.
+ */
+function proxyTarget(origin: string): ProxyTargetDetailed {
+  const url = new URL(origin)
+  return {
+    protocol: url.protocol,
+    hostname: url.hostname.replace(/^\[(.*)\]$/, '$1'),
+    port: url.port
+  }
+}
+
+/**
+ * Signal K mounts `express.json()` ahead of plugin routers, so a PUT/POST
+ * reaches the proxy with its stream already read into `req.body`. httpxy
+ * would then forward the original Content-Length with no bytes behind it,
+ * and mayara would wait for a body that never comes. Write the parsed body
+ * out again; httpxy's pipe of the spent stream then ends the request.
+ */
+function resendParsedBody(proxyReq: ClientRequest, req: ProxiedRequest): void {
+  // A stream nobody read still carries its body, and httpxy pipes it as is.
+  if (!req.readableEnded || req.body === undefined) return
+  const type = req.headers['content-type'] ?? ''
+  let data: string
+  if (type.includes('application/json') || type.includes('+json')) {
+    data = JSON.stringify(req.body)
+  } else if (type.includes('application/x-www-form-urlencoded')) {
+    data = stringifyQuery(req.body as ParsedUrlQueryInput)
+  } else if (type.includes('text/plain') && typeof req.body === 'string') {
+    data = req.body
+  } else {
+    return
+  }
+  // The body parser has already decoded any compression.
+  proxyReq.removeHeader('content-encoding')
+  proxyReq.removeHeader('transfer-encoding')
+  proxyReq.setHeader('content-length', Buffer.byteLength(data))
+  proxyReq.write(data)
+}
+
+function sendRewritten(
+  proxyRes: IncomingMessage,
+  req: IncomingMessage,
+  res: ServerResponse,
+  rewrite: JsonRewriter
+): void {
+  const chunks: Buffer[] = []
+  proxyRes.on('data', (chunk: Buffer) => {
+    chunks.push(chunk)
+  })
+  proxyRes.on('end', () => {
+    const status = proxyRes.statusCode ?? 502
+    const bodyless = req.method === 'HEAD' || status === 204 || status === 304
+    res.statusCode = status
+    for (const [name, value] of Object.entries(proxyRes.headers)) {
+      if (value === undefined || FRAMING_HEADERS.has(name)) continue
+      if (name === 'content-length' && !bodyless) continue
+      res.setHeader(name, value)
+    }
+    if (bodyless) {
+      res.end()
+      return
+    }
+    let body = Buffer.concat(chunks)
+    const type = proxyRes.headers['content-type'] ?? ''
+    // An upstream that compressed anyway sent a body this cannot parse;
+    // it goes on untouched, under its own content-encoding.
+    const encoded = (proxyRes.headers['content-encoding'] ?? 'identity') !== 'identity'
+    if (!encoded && type.includes('application/json')) {
+      try {
+        const parsed: unknown = JSON.parse(body.toString('utf8'))
+        body = Buffer.from(JSON.stringify(rewrite(parsed)))
+      } catch {
+        // Not the JSON it claimed to be: pass it on untouched.
+      }
+    }
+    res.setHeader('content-length', body.length)
+    res.end(body)
+  })
+}
+
+function fail(err: unknown, res: ServerResponse | Socket | undefined): void {
+  if (!res) return
+  if (!(res instanceof ServerResponse)) {
+    res.destroy()
+    return
+  }
+  if (res.destroyed || res.writableEnded) return
+  if (res.headersSent) {
+    res.destroy()
+    return
+  }
+  const code = (err as NodeJS.ErrnoException | undefined)?.code
+  res.writeHead(code && UNREACHABLE_CODES.has(code) ? 504 : 502, {
+    'content-type': 'text/plain; charset=utf-8'
+  })
+  res.end(`mayara GUI proxy: ${code ?? (err instanceof Error ? err.message : String(err))}`)
+}
