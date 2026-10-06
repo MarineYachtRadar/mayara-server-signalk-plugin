@@ -90,9 +90,9 @@ export const ConfigSchema = Type.Object({
         'min, alarm at 0.25 NM / 6 min. Offshore: warn at 1 NM / 20 min, alarm ' +
         'at 0.5 NM / 10 min. collision-alerts-plugin: leave radar alarms to ' +
         'the Signal K Collision Alerts plugin, which raises one alarm per boat ' +
-        'even when it is seen on both AIS and radar. That needs a Signal K ' +
-        'server with the Targets API; on older servers this falls back to ' +
-        'Coastal so radar alarms are never lost.'
+        'even when it is seen on both AIS and radar (with the Target Fusion ' +
+        'plugin linking the two). Choose it only when that plugin is ' +
+        'installed; otherwise radar targets raise no alarm at all.'
     }
   ),
 
