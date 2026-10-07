@@ -8,7 +8,6 @@ import {
   type Motion
 } from '../src/collision/radar-targets.js'
 
-const SELF = 'vessels.urn:mrn:signalk:uuid:self'
 const OWN: Motion = { position: { latitude: 52, longitude: 4 }, course: 0, speed: 5 }
 
 /** A mayara ARPA target as it appears on mayara's v1 stream. */
@@ -34,7 +33,6 @@ function setup(ownShip: Motion | null = OWN) {
     {
       zones: PRESETS.coastal, // warn 926 m / 720 s, alarm 463 m / 360 s
       maxAge: 30_000,
-      selfContext: SELF,
       ownShip: () => ownShip,
       now: () => now
     },
@@ -66,7 +64,7 @@ describe('RadarCollisionMonitor', () => {
     const alert = raised(0)
     expect(alert.level).toBe('alarm')
     expect(alert.data).toMatchObject({
-      targetRef: `${SELF}.radars.nav1.targets.7`,
+      targetRef: 'targets.radar:nav1-7',
       source: 'radar',
       cpa: 200,
       tcpa: 150,

@@ -1196,7 +1196,6 @@ export default function (app: MayaraServerAPI): Plugin {
         {
           zones: PRESETS[collisionPreset],
           maxAge: RADAR_TARGET_MAX_AGE_MS,
-          selfContext: app.selfContext,
           ownShip: () =>
             ownShipFrom(
               app.getSelfPath('navigation') as OwnNavigation | undefined,
