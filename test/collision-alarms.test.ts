@@ -23,7 +23,7 @@ function alert(level: CollisionAlert['level']): CollisionAlert {
     level,
     message: 'Collision risk',
     data: {
-      targetRef: 'vessels.urn:mrn:signalk:uuid:self.radars.nav1.targets.7',
+      targetRef: 'targets.radar:nav1-7',
       source: 'radar',
       cpa: 100,
       tcpa: 60,
@@ -121,7 +121,7 @@ describe('DeltaAlarmSink', () => {
     expect(raised.path).toBe(`notifications.navigation.closestApproach.${ID}`)
     expect(raised.value).toMatchObject({
       state: 'alarm',
-      data: { targetRef: 'vessels.urn:mrn:signalk:uuid:self.radars.nav1.targets.7' }
+      data: { targetRef: 'targets.radar:nav1-7' }
     })
     expect(sentValue(handleMessage, 1).value).toMatchObject({ state: 'normal' })
   })

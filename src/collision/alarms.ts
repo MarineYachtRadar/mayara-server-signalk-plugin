@@ -12,8 +12,8 @@ import type { AlertLevel } from './zones.js'
 /**
  * What every collision source publishes for one target, so radar, camera and
  * AIS alerts look the same to consumers (signalk-collision-alerts raises the
- * AIS ones). `targetRef` is the Signal K path of the target: for a radar
- * target `vessels.<self>.radars.<radarId>.targets.<id>`.
+ * AIS ones). `targetRef` is the Signal K context of the target: for a radar
+ * target `targets.radar:<radarId>-<id>`, which this plugin publishes.
  */
 export interface CollisionAlertData {
   targetRef: string

@@ -1,4 +1,5 @@
 import type { AlarmSink, CollisionAlert } from './alarms.js'
+import { targetContext } from './target-contacts.js'
 import { assess, type AlertLevel, type Zone } from './zones.js'
 
 export interface LatLon {
@@ -31,8 +32,6 @@ export interface RadarCollisionOptions {
   zones: Zone[]
   /** A target not reported for this long (ms) is treated as gone. */
   maxAge: number
-  /** `app.selfContext`, so `targetRef` is an absolute Signal K path. */
-  selfContext: string
   /** Own ship now, or null when its position, course or speed is unknown. */
   ownShip: () => Motion | null
   now?: () => number
@@ -231,7 +230,7 @@ export class RadarCollisionMonitor {
       level,
       message: formatMessage(target),
       data: {
-        targetRef: `${this.options.selfContext}.radars.${target.radarId}.targets.${target.id}`,
+        targetRef: targetContext(target.radarId, target.id),
         source: 'radar',
         cpa: target.cpa,
         tcpa: target.tcpa,
