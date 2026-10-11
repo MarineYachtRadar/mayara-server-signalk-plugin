@@ -1212,7 +1212,13 @@ export default function (app: MayaraServerAPI): Plugin {
     }
     if (!collisionExpiryTimer) {
       collisionExpiryTimer = setInterval(() => {
-        collisionMonitor?.expire()
+        // Also catches a hand-over while mayara's stream is quiet, so alarms
+        // raised here never outlast the takeover by more than one interval.
+        if (collisionAlertsRunning()) {
+          collisionMonitor?.stop()
+        } else {
+          collisionMonitor?.expire()
+        }
         targetPublisher?.expire()
       }, RADAR_TARGET_EXPIRY_INTERVAL_MS)
     }
