@@ -88,11 +88,12 @@ export const ConfigSchema = Type.Object({
         'point of approach (CPA) comes too close too soon. Harbour: warn at ' +
         '100 m / 5 min, alarm at 50 m / 2 min. Coastal: warn at 0.5 NM / 12 ' +
         'min, alarm at 0.25 NM / 6 min. Offshore: warn at 1 NM / 20 min, alarm ' +
-        'at 0.5 NM / 10 min. collision-alerts-plugin: leave radar alarms to ' +
-        'the Signal K Collision Alerts plugin, which raises one alarm per boat ' +
-        'even when it is seen on both AIS and radar (with the Target Fusion ' +
-        'plugin linking the two). Choose it only when that plugin is ' +
-        'installed; otherwise radar targets raise no alarm at all.'
+        'at 0.5 NM / 10 min. While the Signal K Collision Alerts plugin runs, ' +
+        'it raises radar alarms instead, one per boat even when it is seen on ' +
+        'both AIS and radar (with the Target Fusion plugin linking the two). ' +
+        'collision-alerts-plugin: never raise radar alarms here; choose it ' +
+        'only when that plugin is installed, otherwise radar targets raise no ' +
+        'alarm at all.'
     }
   ),
 

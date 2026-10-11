@@ -121,11 +121,22 @@ export class RadarTargetPublisher {
   }
 }
 
+declare global {
+  // Set by signalk-collision-alerts from its start() until its stop(). A
+  // global, since each plugin gets its own shallow copy of `app`.
+  var __signalk_collisionAlerts: { evaluatesTargets?: boolean } | undefined
+}
+
 /**
- * The preset this plugin raises radar alarms with. The collision alerts
- * plugin takes them over only when the user says so, since it may not be
- * installed and a missing alarm is worse than a duplicate one.
+ * Whether signalk-collision-alerts is running and alarms on radar targets
+ * itself. This plugin's radar alarms stand down only then: while that plugin
+ * is missing or stopped, a missing alarm would be worse than a duplicate.
  */
+export function collisionAlertsRunning(): boolean {
+  return globalThis.__signalk_collisionAlerts?.evaluatesTargets === true
+}
+
+/** The preset this plugin raises radar alarms with, when it raises them at all. */
 export function radarAlarmPreset(
   setting: PresetName | 'off' | 'collision-alerts-plugin'
 ): PresetName | 'off' {

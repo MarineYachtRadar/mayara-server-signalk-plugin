@@ -19,7 +19,11 @@ import {
   ownShipFrom,
   type OwnNavigation
 } from './collision/radar-targets.js'
-import { RadarTargetPublisher, radarAlarmPreset } from './collision/target-contacts.js'
+import {
+  RadarTargetPublisher,
+  collisionAlertsRunning,
+  radarAlarmPreset
+} from './collision/target-contacts.js'
 import {
   ContainerConfig,
   ContainerManagerApi,
@@ -1179,7 +1183,7 @@ export default function (app: MayaraServerAPI): Plugin {
     // attempt.
     // Radar targets are always published under targets.*, where a fusion
     // plugin can link them to their AIS vessels. Radar alarms stay here
-    // unless the user hands them to the collision alerts plugin.
+    // unless the user hands them to the collision alerts plugin, or it runs.
     if (!targetPublisher) {
       targetPublisher = new RadarTargetPublisher(
         (delta) => {
@@ -1208,7 +1212,13 @@ export default function (app: MayaraServerAPI): Plugin {
     }
     if (!collisionExpiryTimer) {
       collisionExpiryTimer = setInterval(() => {
-        collisionMonitor?.expire()
+        // Also catches a hand-over while mayara's stream is quiet, so alarms
+        // raised here never outlast the takeover by more than one interval.
+        if (collisionAlertsRunning()) {
+          collisionMonitor?.stop()
+        } else {
+          collisionMonitor?.expire()
+        }
         targetPublisher?.expire()
       }, RADAR_TARGET_EXPIRY_INTERVAL_MS)
     }
@@ -1229,7 +1239,13 @@ export default function (app: MayaraServerAPI): Plugin {
         pathPrefixes: ['notifications.', 'radars.'],
         debug: app.debug.bind(app),
         onValue: (path, value) => {
-          collisionMonitor?.update(path, value)
+          // While collision alerts runs it alarms on these targets itself;
+          // stop() clears what this monitor raised before it took over.
+          if (collisionAlertsRunning()) {
+            collisionMonitor?.stop()
+          } else {
+            collisionMonitor?.update(path, value)
+          }
           targetPublisher?.update(path, value)
         },
         reconnectInterval: (settings.reconnectInterval || 5) * 1000
