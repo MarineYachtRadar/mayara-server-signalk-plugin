@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Delta } from '@signalk/server-api'
 import {
   RadarTargetPublisher,
+  collisionAlertsRunning,
   radarAlarmPreset,
   targetValues
 } from '../src/collision/target-contacts.js'
@@ -138,5 +139,20 @@ describe('radarAlarmPreset', () => {
 
   it('leaves radar alarms to the collision alerts plugin when asked', () => {
     expect(radarAlarmPreset('collision-alerts-plugin')).toBe('off')
+  })
+})
+
+describe('collisionAlertsRunning', () => {
+  afterEach(() => {
+    globalThis.__signalk_collisionAlerts = undefined
+  })
+
+  it('is false while the collision alerts plugin is missing or stopped', () => {
+    expect(collisionAlertsRunning()).toBe(false)
+  })
+
+  it('is true while the collision alerts plugin runs and evaluates targets', () => {
+    globalThis.__signalk_collisionAlerts = { evaluatesTargets: true }
+    expect(collisionAlertsRunning()).toBe(true)
   })
 })

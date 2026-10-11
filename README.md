@@ -175,8 +175,10 @@ are mayara's own, so the alarm agrees with the radar display. This works the
 same whether the plugin runs mayara-server in a container or connects to one
 elsewhere.
 
-A ship seen by both AIS and radar alarms twice, once per sensor, until Signal K
-can tell that both contacts are the same ship.
+While signalk-collision-alerts runs, this plugin leaves radar alarms to it, so
+a ship seen on both AIS and radar alarms once (the Target Fusion plugin links
+the two). When that plugin is stopped or missing, the alarms here come back on
+their own.
 
 ## Features
 
