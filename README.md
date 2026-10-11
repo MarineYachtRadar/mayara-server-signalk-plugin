@@ -178,7 +178,9 @@ elsewhere.
 While signalk-collision-alerts runs, this plugin leaves radar alarms to it, so
 a ship seen on both AIS and radar alarms once (the Target Fusion plugin links
 the two). When that plugin is stopped or missing, the alarms here come back on
-their own.
+their own. The App Store lists both plugins as recommended alongside this one:
+install signalk-collision-alerts for one set of alarms across AIS and radar,
+and signalk-target-fusion so a ship on both is one target.
 
 ## Features
 
