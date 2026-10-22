@@ -58,7 +58,7 @@
   },
   "dependencies": {
     "httpxy": "^0.5.5",
-    "signalk-container-helper": "^0.11.0",
+    "signalk-container-helper": "^0.12.0",
     "typebox": "^1.3.11",
     "ws": "^8.14.0"
   },
