@@ -128,10 +128,9 @@ export class RadarTargetPublisher {
   }
 }
 
-/** The PropertyValue signalk-collision-alerts announces itself with. */
 export const COLLISION_ALERTS_PROPERTY = 'collisionAlerts'
 
-/** Whether a collisionAlerts announcement says the plugin evaluates targets. */
+// PropertyValues may be any value, functions included, so check the shape.
 function evaluatesTargets(value: unknown): boolean {
   return (
     typeof value === 'object' &&
@@ -149,7 +148,7 @@ export class CollisionAlertsWatch {
   private latest: PropertyValue | undefined
   private unsubscribe: (() => void) | undefined
 
-  /** Follows the collisionAlerts property value from now on. */
+  /** The history replays on subscribe, so plugin start order does not matter. */
   start(app: Pick<PropertyValuesEmitter, 'onPropertyValues'>): void {
     this.stop()
     this.unsubscribe = app.onPropertyValues(COLLISION_ALERTS_PROPERTY, (history) => {
@@ -157,14 +156,13 @@ export class CollisionAlertsWatch {
     })
   }
 
-  /** Stops following the property value and forgets the last announcement. */
+  /** Forgets the announcement so a restart never inherits a stale one. */
   stop(): void {
     this.unsubscribe?.()
     this.unsubscribe = undefined
     this.latest = undefined
   }
 
-  /** Whether the latest announcement says collision alerts evaluates targets. */
   running(): boolean {
     return evaluatesTargets(this.latest?.value)
   }
