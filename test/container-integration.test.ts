@@ -46,6 +46,40 @@ vi.mock('../src/spoke-forwarder.js', () => ({
   }))
 }))
 
+// Records the collision monitor and the delta forwarder the plugin builds, so
+// the stand-down tests can feed mayara values and inspect what the monitor got.
+const collision = vi.hoisted(() => ({
+  monitors: [] as Array<{
+    update: ReturnType<typeof vi.fn>
+    expire: ReturnType<typeof vi.fn>
+    stop: ReturnType<typeof vi.fn>
+  }>,
+  forwarders: [] as Array<{ onValue: (path: string, value: unknown) => void }>
+}))
+
+vi.mock('../src/collision/radar-targets.js', async () => {
+  const actual = await vi.importActual<typeof import('../src/collision/radar-targets.js')>(
+    '../src/collision/radar-targets.js'
+  )
+  function RadarCollisionMonitor() {
+    const monitor = { update: vi.fn(), expire: vi.fn(), stop: vi.fn() }
+    collision.monitors.push(monitor)
+    return monitor
+  }
+  return { ...actual, RadarCollisionMonitor }
+})
+
+vi.mock('../src/delta-forwarder.js', () => {
+  function DeltaForwarder(
+    _app: unknown,
+    options: { onValue: (path: string, value: unknown) => void }
+  ) {
+    collision.forwarders.push({ onValue: options.onValue })
+    return { start: vi.fn(), stop: vi.fn() }
+  }
+  return { DeltaForwarder }
+})
+
 // Default-stub the token flow so tests that aren't specifically about
 // it don't issue stray HTTP requests against a non-existent local
 // Signal K server. Token-flow tests override per-call via vi.mocked().
@@ -1623,6 +1657,78 @@ describe('mayara-server-signalk-plugin container integration', () => {
       const res = makeRes()
       await getHandler(router, 'GET /api/gui-url')({ hostname: 'boat.local' }, res)
       expect(res.body).toEqual({ url: 'https://boat.local:6502/gui/' })
+      await plugin.stop()
+    })
+  })
+
+  describe('radar alarm stand-down while collision alerts runs', () => {
+    const TARGET_PATH = 'radars.radar-1.targets.7'
+    const RADAR_TARGET_EXPIRY_INTERVAL_MS = 5_000
+
+    beforeEach(() => {
+      collision.monitors.length = 0
+      collision.forwarders.length = 0
+    })
+
+    async function startWithAnnouncement(
+      ...values: unknown[]
+    ): Promise<LoadedPlugin & { monitor: (typeof collision.monitors)[number] }> {
+      const loaded = await loadPlugin({}, undefined, { fakeTimers: true })
+      const [name, listener] = loaded.app.onPropertyValues.mock.calls[0] as [
+        string,
+        (
+          history: Array<{ timestamp: number; setter: string; name: string; value: unknown }>
+        ) => void
+      ]
+      expect(name).toBe('collisionAlerts')
+      listener(
+        values.map((value, i) => ({
+          timestamp: i,
+          setter: 'signalk-collision-alerts',
+          name,
+          value
+        }))
+      )
+      expect(collision.monitors).toHaveLength(1)
+      return { ...loaded, monitor: collision.monitors[0] }
+    }
+
+    it('feeds the radar monitor while collision alerts is not announced', async () => {
+      const { plugin, monitor } = await startWithAnnouncement(undefined)
+      collision.forwarders[0].onValue(TARGET_PATH, {})
+      await vi.advanceTimersByTimeAsync(RADAR_TARGET_EXPIRY_INTERVAL_MS)
+      expect(monitor.update).toHaveBeenCalledWith(TARGET_PATH, {})
+      expect(monitor.expire).toHaveBeenCalled()
+      expect(monitor.stop).not.toHaveBeenCalled()
+      await plugin.stop()
+    })
+
+    it('stops the radar monitor on mayara values while collision alerts runs', async () => {
+      const { plugin, monitor } = await startWithAnnouncement(undefined, {
+        evaluatesTargets: true
+      })
+      collision.forwarders[0].onValue(TARGET_PATH, {})
+      expect(monitor.stop).toHaveBeenCalled()
+      expect(monitor.update).not.toHaveBeenCalled()
+      await plugin.stop()
+    })
+
+    it('stops the radar monitor on the expiry timer while collision alerts runs', async () => {
+      const { plugin, monitor } = await startWithAnnouncement({ evaluatesTargets: true })
+      await vi.advanceTimersByTimeAsync(RADAR_TARGET_EXPIRY_INTERVAL_MS)
+      expect(monitor.stop).toHaveBeenCalled()
+      expect(monitor.expire).not.toHaveBeenCalled()
+      await plugin.stop()
+    })
+
+    it('raises radar alarms again once collision alerts stops', async () => {
+      const { plugin, monitor } = await startWithAnnouncement(
+        { evaluatesTargets: true },
+        { evaluatesTargets: false }
+      )
+      collision.forwarders[0].onValue(TARGET_PATH, {})
+      expect(monitor.update).toHaveBeenCalledWith(TARGET_PATH, {})
+      expect(monitor.stop).not.toHaveBeenCalled()
       await plugin.stop()
     })
   })
