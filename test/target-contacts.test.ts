@@ -196,6 +196,14 @@ describe('CollisionAlertsWatch', () => {
     expect(watch.running()).toBe(false)
   })
 
+  it('lets a stopped announcement override the global', () => {
+    const watch = new CollisionAlertsWatch()
+    globalThis.__signalk_collisionAlerts = { evaluatesTargets: true }
+    watch.start(app)
+    announce({ evaluatesTargets: false })
+    expect(watch.running()).toBe(false)
+  })
+
   it('still honours the global set by older collision alerts releases', () => {
     const watch = new CollisionAlertsWatch()
     globalThis.__signalk_collisionAlerts = { evaluatesTargets: true }

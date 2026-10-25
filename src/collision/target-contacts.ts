@@ -1,4 +1,11 @@
-import type { Context, Delta, Path, PathValue, PropertyValuesEmitter } from '@signalk/server-api'
+import type {
+  Context,
+  Delta,
+  Path,
+  PathValue,
+  PropertyValue,
+  PropertyValuesEmitter
+} from '@signalk/server-api'
 import type { PresetName } from './zones.js'
 
 // mayara numbers its ARPA targets, so the last `-` of a target id always
@@ -129,6 +136,7 @@ declare global {
   var __signalk_collisionAlerts: { evaluatesTargets?: boolean } | undefined
 }
 
+/** Whether a collisionAlerts announcement says the plugin evaluates targets. */
 function evaluatesTargets(value: unknown): boolean {
   return (
     typeof value === 'object' &&
@@ -143,24 +151,33 @@ function evaluatesTargets(value: unknown): boolean {
  * is missing or stopped, a missing alarm would be worse than a duplicate.
  */
 export class CollisionAlertsWatch {
-  private announced = false
+  // The latest announcement, or undefined before collision alerts made one.
+  private latest: PropertyValue | undefined
   private unsubscribe: (() => void) | undefined
 
+  /** Follows the collisionAlerts property value from now on. */
   start(app: Pick<PropertyValuesEmitter, 'onPropertyValues'>): void {
     this.stop()
     this.unsubscribe = app.onPropertyValues(COLLISION_ALERTS_PROPERTY, (history) => {
-      this.announced = evaluatesTargets(history[history.length - 1]?.value)
+      this.latest = history[history.length - 1]
     })
   }
 
+  /** Stops following the property value and forgets the last announcement. */
   stop(): void {
     this.unsubscribe?.()
     this.unsubscribe = undefined
-    this.announced = false
+    this.latest = undefined
   }
 
+  /**
+   * The latest announcement decides; the global set by releases that
+   * predate the property value counts only when there is none.
+   */
   running(): boolean {
-    return this.announced || evaluatesTargets(globalThis.__signalk_collisionAlerts)
+    return this.latest
+      ? evaluatesTargets(this.latest.value)
+      : evaluatesTargets(globalThis.__signalk_collisionAlerts)
   }
 }
 
