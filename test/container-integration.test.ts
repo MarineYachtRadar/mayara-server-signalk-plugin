@@ -186,6 +186,7 @@ interface MockApp {
   error: ReturnType<typeof vi.fn>
   setPluginStatus: ReturnType<typeof vi.fn>
   setPluginError: ReturnType<typeof vi.fn>
+  onPropertyValues: ReturnType<typeof vi.fn>
   getDataDirPath: () => string
   savePluginOptions: ReturnType<typeof vi.fn>
   radarApi: { register: ReturnType<typeof vi.fn>; unRegister: ReturnType<typeof vi.fn> }
@@ -203,6 +204,7 @@ function makeMockApp(config?: MockApp['config']): MockApp {
     error: vi.fn(),
     setPluginStatus: vi.fn(),
     setPluginError: vi.fn(),
+    onPropertyValues: vi.fn(() => () => undefined),
     // Opaque string — mayara no longer reads or writes anything in
     // getDataDirPath() now that the hash-file workaround is gone.
     getDataDirPath: () => '/tmp/mayara-test',
