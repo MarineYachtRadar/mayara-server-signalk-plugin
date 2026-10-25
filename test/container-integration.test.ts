@@ -1670,9 +1670,13 @@ describe('mayara-server-signalk-plugin container integration', () => {
       collision.forwarders.length = 0
     })
 
-    async function startWithAnnouncement(
-      ...values: unknown[]
-    ): Promise<LoadedPlugin & { monitor: (typeof collision.monitors)[number] }> {
+    // The server hands the listener the whole history on every emit.
+    async function startWithAnnouncement(...values: unknown[]): Promise<
+      LoadedPlugin & {
+        monitor: (typeof collision.monitors)[number]
+        announce: (...values: unknown[]) => void
+      }
+    > {
       const loaded = await loadPlugin({}, undefined, { fakeTimers: true })
       const [name, listener] = loaded.app.onPropertyValues.mock.calls[0] as [
         string,
@@ -1681,16 +1685,19 @@ describe('mayara-server-signalk-plugin container integration', () => {
         ) => void
       ]
       expect(name).toBe('collisionAlerts')
-      listener(
-        values.map((value, i) => ({
-          timestamp: i,
-          setter: 'signalk-collision-alerts',
-          name,
-          value
-        }))
-      )
+      const announce = (...history: unknown[]): void => {
+        listener(
+          history.map((value, i) => ({
+            timestamp: i,
+            setter: 'signalk-collision-alerts',
+            name,
+            value
+          }))
+        )
+      }
+      announce(...values)
       expect(collision.monitors).toHaveLength(1)
-      return { ...loaded, monitor: collision.monitors[0] }
+      return { ...loaded, monitor: collision.monitors[0], announce }
     }
 
     it('feeds the radar monitor while collision alerts is not announced', async () => {
@@ -1722,10 +1729,15 @@ describe('mayara-server-signalk-plugin container integration', () => {
     })
 
     it('raises radar alarms again once collision alerts stops', async () => {
-      const { plugin, monitor } = await startWithAnnouncement(
-        { evaluatesTargets: true },
-        { evaluatesTargets: false }
-      )
+      const { plugin, monitor, announce } = await startWithAnnouncement(undefined, {
+        evaluatesTargets: true
+      })
+      collision.forwarders[0].onValue(TARGET_PATH, {})
+      expect(monitor.stop).toHaveBeenCalled()
+      expect(monitor.update).not.toHaveBeenCalled()
+
+      announce(undefined, { evaluatesTargets: true }, { evaluatesTargets: false })
+      monitor.stop.mockClear()
       collision.forwarders[0].onValue(TARGET_PATH, {})
       expect(monitor.update).toHaveBeenCalledWith(TARGET_PATH, {})
       expect(monitor.stop).not.toHaveBeenCalled()
