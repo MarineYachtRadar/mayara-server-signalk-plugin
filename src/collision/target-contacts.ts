@@ -131,11 +131,6 @@ export class RadarTargetPublisher {
 /** The PropertyValue signalk-collision-alerts announces itself with. */
 export const COLLISION_ALERTS_PROPERTY = 'collisionAlerts'
 
-declare global {
-  // Set by signalk-collision-alerts releases that predate its PropertyValue.
-  var __signalk_collisionAlerts: { evaluatesTargets?: boolean } | undefined
-}
-
 /** Whether a collisionAlerts announcement says the plugin evaluates targets. */
 function evaluatesTargets(value: unknown): boolean {
   return (
@@ -151,7 +146,6 @@ function evaluatesTargets(value: unknown): boolean {
  * is missing or stopped, a missing alarm would be worse than a duplicate.
  */
 export class CollisionAlertsWatch {
-  // The latest announcement, or undefined before collision alerts made one.
   private latest: PropertyValue | undefined
   private unsubscribe: (() => void) | undefined
 
@@ -170,14 +164,9 @@ export class CollisionAlertsWatch {
     this.latest = undefined
   }
 
-  /**
-   * The latest announcement decides; the global set by releases that
-   * predate the property value counts only when there is none.
-   */
+  /** Whether the latest announcement says collision alerts evaluates targets. */
   running(): boolean {
-    return this.latest
-      ? evaluatesTargets(this.latest.value)
-      : evaluatesTargets(globalThis.__signalk_collisionAlerts)
+    return evaluatesTargets(this.latest?.value)
   }
 }
 

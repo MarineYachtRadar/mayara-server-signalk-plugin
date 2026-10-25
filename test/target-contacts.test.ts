@@ -165,7 +165,6 @@ describe('CollisionAlertsWatch', () => {
   }
 
   afterEach(() => {
-    globalThis.__signalk_collisionAlerts = undefined
     listener = undefined
     vi.clearAllMocks()
   })
@@ -194,19 +193,5 @@ describe('CollisionAlertsWatch', () => {
     watch.stop()
     expect(unsubscribe).toHaveBeenCalledOnce()
     expect(watch.running()).toBe(false)
-  })
-
-  it('lets a stopped announcement override the global', () => {
-    const watch = new CollisionAlertsWatch()
-    globalThis.__signalk_collisionAlerts = { evaluatesTargets: true }
-    watch.start(app)
-    announce({ evaluatesTargets: false })
-    expect(watch.running()).toBe(false)
-  })
-
-  it('still honours the global set by older collision alerts releases', () => {
-    const watch = new CollisionAlertsWatch()
-    globalThis.__signalk_collisionAlerts = { evaluatesTargets: true }
-    expect(watch.running()).toBe(true)
   })
 })
