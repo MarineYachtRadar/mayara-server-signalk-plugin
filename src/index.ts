@@ -1399,12 +1399,14 @@ export default function (app: MayaraServerAPI): Plugin {
 
   // Tell the server a control path never goes stale.
   //
-  // `setDefaultMetadata(path, { timeout: 0 })` is the supported way for a
-  // plugin to declare stale-data behaviour for the paths it publishes
-  // (SignalK/signalk-server#3025); `0` disables enforcement for the path.
+  // `setDefaultMetadata(path, { updateContract: 'event' })` is the supported
+  // way for a plugin to declare stale-data behaviour for the paths it
+  // publishes (SignalK/signalk-server#3025). An `event` path changes when
+  // something happens to it, not on a schedule, so the server never expects a
+  // refresh and never times it out; only `periodic` paths, the default, expire.
   // Metadata attached to individual deltas is NOT consulted when the server
-  // resolves a timeout, so this has to be a separate call — putting it on
-  // every forwarded delta would add traffic and change nothing.
+  // resolves a path's contract, so this has to be a separate call — putting it
+  // on every forwarded delta would add traffic and change nothing.
   //
   // A value the user has set for the path in the Data Browser wins over this,
   // which is intended: the plugin is stating a default, not overriding an
@@ -1416,7 +1418,7 @@ export default function (app: MayaraServerAPI): Plugin {
   // handler that follows it.
   async function declareControlNotStale(path: string): Promise<void> {
     try {
-      await app.setDefaultMetadata(path, { timeout: 0 })
+      await app.setDefaultMetadata(path, { updateContract: 'event' })
     } catch (err) {
       app.debug(`Could not declare ${path} exempt from staleness: ${errMsg(err)}`)
     }
@@ -1430,13 +1432,13 @@ export default function (app: MayaraServerAPI): Plugin {
   // too, but mayara rejects the write. Registration is idempotent on rediscovery
   // because the source (PLUGIN_ID) key overwrites.
   //
-  // Each control also gets `timeout: 0` metadata, exempting it from the
+  // Each control is also declared event-driven, exempting it from the
   // server's stale-data enforcement. A control is a setting, not a
-  // measurement: mayara emits it once when it changes and then stays quiet,
-  // so under the 60 s default every control on an idle radar was blanked to
-  // null a minute after the last change — the radar's actual range, gain and
-  // autoStandby state disappeared from the Data Browser and from any client
-  // reading them off the stream, while the radar was working normally.
+  // measurement: mayara emits it once when it changes and then stays quiet.
+  // As a periodic path, every control on an idle radar would be nulled a
+  // minute after its last change, and the radar's range, gain and power would
+  // vanish from the Data Browser and from every client reading the stream,
+  // while the radar works normally.
   async function registerControlPutHandlers(radarId: string): Promise<void> {
     if (!client) return
     try {

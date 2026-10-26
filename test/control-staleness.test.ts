@@ -1,17 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // Controls are settings, not measurements: mayara emits one when it changes
-// and then stays quiet. Under signalk-server's stale-data enforcement (60 s by
-// default) every control on an idle radar was blanked to null a minute after
-// the last change — range, gain and autoStandby vanished from the Data Browser
-// while the radar was working normally.
-//
-// The fix declares `timeout: 0` for each control path via setDefaultMetadata,
-// the supported way for a plugin to state stale-data behaviour for paths it
-// publishes (SignalK/signalk-server#3025). These tests pin that it happens for
-// every control, that a server without the method still gets its PUT handlers,
-// and that the declaration is a separate call rather than delta metadata —
-// which the server does not consult when resolving a timeout.
+// and then stays quiet. signalk-server's stale-data enforcement nulls a
+// periodic path a minute after its last update, so each control path is
+// declared `updateContract: 'event'` via setDefaultMetadata, the supported way
+// for a plugin to state stale-data behaviour for paths it publishes
+// (SignalK/signalk-server#3025). These tests pin that it happens for every
+// control, that a server without the method still gets its PUT handlers, and
+// that the declaration is a separate call rather than delta metadata — which
+// the server does not consult when resolving a path's contract.
 
 const RADAR_ID = 'fur6424A'
 // autoStandby is the control from the reported incident; the other two are
@@ -110,7 +107,7 @@ describe('control paths are exempted from stale-data enforcement', () => {
     vi.restoreAllMocks()
   })
 
-  it('declares timeout: 0 for every control on a discovered radar', async () => {
+  it('declares every control on a discovered radar event-driven', async () => {
     const { app, rec } = makeApp()
     const plugin = await startPlugin(app)
 
@@ -118,8 +115,8 @@ describe('control paths are exempted from stale-data enforcement', () => {
       const path = `radars.${RADAR_ID}.controls.${controlId}`
       const entry = rec.metadata.find((m) => m.path === path)
       expect(entry, `no metadata declared for ${path}`).toBeDefined()
-      // 0 disables enforcement; anything else leaves the path expiring.
-      expect(entry?.value.timeout).toBe(0)
+      // Only a periodic path, the default, expires.
+      expect(entry?.value.updateContract).toBe('event')
     }
     plugin.stop()
   })
@@ -148,15 +145,15 @@ describe('control paths are exempted from stale-data enforcement', () => {
 
   it('declares metadata out of band, not as delta metadata', async () => {
     // The server does not consult metadata attached to individual deltas when
-    // resolving a timeout, so a `meta` key riding along on handleMessage would
-    // look right and do nothing.
+    // resolving a path's contract, so a `meta` key riding along on
+    // handleMessage would look right and do nothing.
     const { app, rec } = makeApp()
     const plugin = await startPlugin(app)
 
     expect(rec.metadata.length).toBeGreaterThan(0)
     const handleMessage = app.handleMessage as ReturnType<typeof vi.fn>
     const metaDeltas = handleMessage.mock.calls.filter((call) =>
-      JSON.stringify(call[1] ?? {}).includes('"timeout"')
+      JSON.stringify(call[1] ?? {}).includes('"updateContract"')
     )
     expect(metaDeltas).toHaveLength(0)
     plugin.stop()
