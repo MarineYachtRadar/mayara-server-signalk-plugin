@@ -64,6 +64,7 @@ function makeApp(opts: { withSetDefaultMetadata?: boolean } = {}): {
     error: vi.fn(),
     setPluginStatus: vi.fn(),
     setPluginError: vi.fn(),
+    onPropertyValues: vi.fn(() => () => undefined),
     getDataDirPath: () => '/tmp/mayara-staleness-test',
     savePluginOptions: vi.fn((_c: unknown, cb: (e: null) => void) => {
       cb(null)

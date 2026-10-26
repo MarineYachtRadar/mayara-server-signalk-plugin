@@ -46,6 +46,40 @@ vi.mock('../src/spoke-forwarder.js', () => ({
   }))
 }))
 
+// Records the collision monitor and the delta forwarder the plugin builds, so
+// the stand-down tests can feed mayara values and inspect what the monitor got.
+const collision = vi.hoisted(() => ({
+  monitors: [] as Array<{
+    update: ReturnType<typeof vi.fn>
+    expire: ReturnType<typeof vi.fn>
+    stop: ReturnType<typeof vi.fn>
+  }>,
+  forwarders: [] as Array<{ onValue: (path: string, value: unknown) => void }>
+}))
+
+vi.mock('../src/collision/radar-targets.js', async () => {
+  const actual = await vi.importActual<typeof import('../src/collision/radar-targets.js')>(
+    '../src/collision/radar-targets.js'
+  )
+  function RadarCollisionMonitor() {
+    const monitor = { update: vi.fn(), expire: vi.fn(), stop: vi.fn() }
+    collision.monitors.push(monitor)
+    return monitor
+  }
+  return { ...actual, RadarCollisionMonitor }
+})
+
+vi.mock('../src/delta-forwarder.js', () => {
+  function DeltaForwarder(
+    _app: unknown,
+    options: { onValue: (path: string, value: unknown) => void }
+  ) {
+    collision.forwarders.push({ onValue: options.onValue })
+    return { start: vi.fn(), stop: vi.fn() }
+  }
+  return { DeltaForwarder }
+})
+
 // Default-stub the token flow so tests that aren't specifically about
 // it don't issue stray HTTP requests against a non-existent local
 // Signal K server. Token-flow tests override per-call via vi.mocked().
@@ -186,6 +220,7 @@ interface MockApp {
   error: ReturnType<typeof vi.fn>
   setPluginStatus: ReturnType<typeof vi.fn>
   setPluginError: ReturnType<typeof vi.fn>
+  onPropertyValues: ReturnType<typeof vi.fn>
   getDataDirPath: () => string
   savePluginOptions: ReturnType<typeof vi.fn>
   radarApi: { register: ReturnType<typeof vi.fn>; unRegister: ReturnType<typeof vi.fn> }
@@ -203,6 +238,7 @@ function makeMockApp(config?: MockApp['config']): MockApp {
     error: vi.fn(),
     setPluginStatus: vi.fn(),
     setPluginError: vi.fn(),
+    onPropertyValues: vi.fn(() => () => undefined),
     // Opaque string — mayara no longer reads or writes anything in
     // getDataDirPath() now that the hash-file workaround is gone.
     getDataDirPath: () => '/tmp/mayara-test',
@@ -1621,6 +1657,90 @@ describe('mayara-server-signalk-plugin container integration', () => {
       const res = makeRes()
       await getHandler(router, 'GET /api/gui-url')({ hostname: 'boat.local' }, res)
       expect(res.body).toEqual({ url: 'https://boat.local:6502/gui/' })
+      await plugin.stop()
+    })
+  })
+
+  describe('radar alarm stand-down while collision alerts runs', () => {
+    const TARGET_PATH = 'radars.radar-1.targets.7'
+    const RADAR_TARGET_EXPIRY_INTERVAL_MS = 5_000
+
+    beforeEach(() => {
+      collision.monitors.length = 0
+      collision.forwarders.length = 0
+    })
+
+    // The server hands the listener the whole history on every emit.
+    async function startWithAnnouncement(...values: unknown[]): Promise<
+      LoadedPlugin & {
+        monitor: (typeof collision.monitors)[number]
+        announce: (...values: unknown[]) => void
+      }
+    > {
+      const loaded = await loadPlugin({}, undefined, { fakeTimers: true })
+      const [name, listener] = loaded.app.onPropertyValues.mock.calls[0] as [
+        string,
+        (
+          history: Array<{ timestamp: number; setter: string; name: string; value: unknown }>
+        ) => void
+      ]
+      expect(name).toBe('collisionAlerts')
+      const announce = (...history: unknown[]): void => {
+        listener(
+          history.map((value, i) => ({
+            timestamp: i,
+            setter: 'signalk-collision-alerts',
+            name,
+            value
+          }))
+        )
+      }
+      announce(...values)
+      expect(collision.monitors).toHaveLength(1)
+      return { ...loaded, monitor: collision.monitors[0], announce }
+    }
+
+    it('feeds the radar monitor while collision alerts is not announced', async () => {
+      const { plugin, monitor } = await startWithAnnouncement(undefined)
+      collision.forwarders[0].onValue(TARGET_PATH, {})
+      await vi.advanceTimersByTimeAsync(RADAR_TARGET_EXPIRY_INTERVAL_MS)
+      expect(monitor.update).toHaveBeenCalledWith(TARGET_PATH, {})
+      expect(monitor.expire).toHaveBeenCalled()
+      expect(monitor.stop).not.toHaveBeenCalled()
+      await plugin.stop()
+    })
+
+    it('stops the radar monitor on mayara values while collision alerts runs', async () => {
+      const { plugin, monitor } = await startWithAnnouncement(undefined, {
+        evaluatesTargets: true
+      })
+      collision.forwarders[0].onValue(TARGET_PATH, {})
+      expect(monitor.stop).toHaveBeenCalled()
+      expect(monitor.update).not.toHaveBeenCalled()
+      await plugin.stop()
+    })
+
+    it('stops the radar monitor on the expiry timer while collision alerts runs', async () => {
+      const { plugin, monitor } = await startWithAnnouncement({ evaluatesTargets: true })
+      await vi.advanceTimersByTimeAsync(RADAR_TARGET_EXPIRY_INTERVAL_MS)
+      expect(monitor.stop).toHaveBeenCalled()
+      expect(monitor.expire).not.toHaveBeenCalled()
+      await plugin.stop()
+    })
+
+    it('raises radar alarms again once collision alerts stops', async () => {
+      const { plugin, monitor, announce } = await startWithAnnouncement(undefined, {
+        evaluatesTargets: true
+      })
+      collision.forwarders[0].onValue(TARGET_PATH, {})
+      expect(monitor.stop).toHaveBeenCalled()
+      expect(monitor.update).not.toHaveBeenCalled()
+
+      announce(undefined, { evaluatesTargets: true }, { evaluatesTargets: false })
+      monitor.stop.mockClear()
+      collision.forwarders[0].onValue(TARGET_PATH, {})
+      expect(monitor.update).toHaveBeenCalledWith(TARGET_PATH, {})
+      expect(monitor.stop).not.toHaveBeenCalled()
       await plugin.stop()
     })
   })

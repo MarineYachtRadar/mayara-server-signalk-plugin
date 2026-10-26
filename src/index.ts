@@ -21,7 +21,7 @@ import {
 } from './collision/radar-targets.js'
 import {
   RadarTargetPublisher,
-  collisionAlertsRunning,
+  CollisionAlertsWatch,
   radarAlarmPreset
 } from './collision/target-contacts.js'
 import {
@@ -164,6 +164,7 @@ export default function (app: MayaraServerAPI): Plugin {
   // hand-edit shows where the operator looks. Empty otherwise.
   let configHint = ''
   const knownRadars = new Set<string>()
+  const collisionAlerts = new CollisionAlertsWatch()
   // Track the WebSocket upgrade listener so stop() can detach it.
   // The HTTP server outlives plugin restarts (disable/enable, config
   // saves), so leaving the listener registered would accumulate one
@@ -200,6 +201,7 @@ export default function (app: MayaraServerAPI): Plugin {
       // start (a fast disable/enable or config save) so only the loop this
       // start launches is live.
       tokenGeneration++
+      collisionAlerts.start(app)
       void asyncStart(merged).catch((err: unknown) => {
         app.setPluginError(`Startup failed: ${err instanceof Error ? err.message : String(err)}`)
       })
@@ -247,6 +249,7 @@ export default function (app: MayaraServerAPI): Plugin {
         collisionMonitor.stop()
         collisionMonitor = null
       }
+      collisionAlerts.stop()
       if (targetPublisher) {
         targetPublisher.stop()
         targetPublisher = null
@@ -1214,7 +1217,7 @@ export default function (app: MayaraServerAPI): Plugin {
       collisionExpiryTimer = setInterval(() => {
         // Also catches a hand-over while mayara's stream is quiet, so alarms
         // raised here never outlast the takeover by more than one interval.
-        if (collisionAlertsRunning()) {
+        if (collisionAlerts.running()) {
           collisionMonitor?.stop()
         } else {
           collisionMonitor?.expire()
@@ -1241,7 +1244,7 @@ export default function (app: MayaraServerAPI): Plugin {
         onValue: (path, value) => {
           // While collision alerts runs it alarms on these targets itself;
           // stop() clears what this monitor raised before it took over.
-          if (collisionAlertsRunning()) {
+          if (collisionAlerts.running()) {
             collisionMonitor?.stop()
           } else {
             collisionMonitor?.update(path, value)

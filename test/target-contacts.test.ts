@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { Delta } from '@signalk/server-api'
+import type { Delta, PropertyValuesEmitter } from '@signalk/server-api'
 import {
   RadarTargetPublisher,
-  collisionAlertsRunning,
+  CollisionAlertsWatch,
   radarAlarmPreset,
   targetValues
 } from '../src/collision/target-contacts.js'
@@ -142,17 +142,56 @@ describe('radarAlarmPreset', () => {
   })
 })
 
-describe('collisionAlertsRunning', () => {
+describe('CollisionAlertsWatch', () => {
+  type Callback = Parameters<PropertyValuesEmitter['onPropertyValues']>[1]
+  let listener: Callback | undefined
+  const unsubscribe = vi.fn()
+  const app = {
+    onPropertyValues: vi.fn((_name: string, cb: Callback) => {
+      listener = cb
+      return unsubscribe
+    })
+  }
+  const announce = (...values: unknown[]) => {
+    listener?.([
+      undefined,
+      ...values.map((value) => ({
+        timestamp: 0,
+        setter: 'signalk-collision-alerts',
+        name: 'collisionAlerts',
+        value
+      }))
+    ])
+  }
+
   afterEach(() => {
-    globalThis.__signalk_collisionAlerts = undefined
+    listener = undefined
+    vi.clearAllMocks()
   })
 
   it('is false while the collision alerts plugin is missing or stopped', () => {
-    expect(collisionAlertsRunning()).toBe(false)
+    const watch = new CollisionAlertsWatch()
+    watch.start(app)
+    announce()
+    expect(watch.running()).toBe(false)
+    announce({ evaluatesTargets: true }, { evaluatesTargets: false })
+    expect(watch.running()).toBe(false)
   })
 
-  it('is true while the collision alerts plugin runs and evaluates targets', () => {
-    globalThis.__signalk_collisionAlerts = { evaluatesTargets: true }
-    expect(collisionAlertsRunning()).toBe(true)
+  it('follows the latest value the collision alerts plugin announced', () => {
+    const watch = new CollisionAlertsWatch()
+    watch.start(app)
+    expect(app.onPropertyValues).toHaveBeenCalledWith('collisionAlerts', expect.any(Function))
+    announce({ evaluatesTargets: false }, { evaluatesTargets: true })
+    expect(watch.running()).toBe(true)
+  })
+
+  it('stops listening and forgets the announcement on stop', () => {
+    const watch = new CollisionAlertsWatch()
+    watch.start(app)
+    announce({ evaluatesTargets: true })
+    watch.stop()
+    expect(unsubscribe).toHaveBeenCalledOnce()
+    expect(watch.running()).toBe(false)
   })
 })

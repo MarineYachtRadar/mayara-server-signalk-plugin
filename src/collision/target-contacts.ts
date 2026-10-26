@@ -1,4 +1,11 @@
-import type { Context, Delta, Path, PathValue } from '@signalk/server-api'
+import type {
+  Context,
+  Delta,
+  Path,
+  PathValue,
+  PropertyValue,
+  PropertyValuesEmitter
+} from '@signalk/server-api'
 import type { PresetName } from './zones.js'
 
 // mayara numbers its ARPA targets, so the last `-` of a target id always
@@ -121,10 +128,15 @@ export class RadarTargetPublisher {
   }
 }
 
-declare global {
-  // Set by signalk-collision-alerts from its start() until its stop(). A
-  // global, since each plugin gets its own shallow copy of `app`.
-  var __signalk_collisionAlerts: { evaluatesTargets?: boolean } | undefined
+export const COLLISION_ALERTS_PROPERTY = 'collisionAlerts'
+
+// PropertyValues may be any value, functions included, so check the shape.
+function evaluatesTargets(value: unknown): boolean {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as { evaluatesTargets?: unknown }).evaluatesTargets === true
+  )
 }
 
 /**
@@ -132,8 +144,28 @@ declare global {
  * itself. This plugin's radar alarms stand down only then: while that plugin
  * is missing or stopped, a missing alarm would be worse than a duplicate.
  */
-export function collisionAlertsRunning(): boolean {
-  return globalThis.__signalk_collisionAlerts?.evaluatesTargets === true
+export class CollisionAlertsWatch {
+  private latest: PropertyValue | undefined
+  private unsubscribe: (() => void) | undefined
+
+  /** The history replays on subscribe, so plugin start order does not matter. */
+  start(app: Pick<PropertyValuesEmitter, 'onPropertyValues'>): void {
+    this.stop()
+    this.unsubscribe = app.onPropertyValues(COLLISION_ALERTS_PROPERTY, (history) => {
+      this.latest = history[history.length - 1]
+    })
+  }
+
+  /** Forgets the announcement so a restart never inherits a stale one. */
+  stop(): void {
+    this.unsubscribe?.()
+    this.unsubscribe = undefined
+    this.latest = undefined
+  }
+
+  running(): boolean {
+    return evaluatesTargets(this.latest?.value)
+  }
 }
 
 /** The preset this plugin raises radar alarms with, when it raises them at all. */
