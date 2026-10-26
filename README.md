@@ -167,7 +167,7 @@ Each ARPA target mayara tracks gets its own collision alarm when its closest
 point of approach (CPA) comes too close too soon. **Collision alarms → Radar
 targets** picks the sensitivity (harbour, coastal — the default — or offshore)
 or turns them off. The alarms use the same notification shape as
-[signalk-collision-alerts](https://github.com/dirkwa/signalk-collision-alerts)
+[Collision Alerts](https://github.com/SignalK/collision-alerts)
 does for AIS, one per target at
 `notifications.navigation.closestApproach.radar:<radarId>:<targetId>`, so
 chart plotters can acknowledge them and draw the CPA line. CPA and time to CPA
@@ -175,11 +175,11 @@ are mayara's own, so the alarm agrees with the radar display. This works the
 same whether the plugin runs mayara-server in a container or connects to one
 elsewhere.
 
-While signalk-collision-alerts runs, this plugin leaves radar alarms to it, so
+While Collision Alerts runs, this plugin leaves radar alarms to it, so
 a ship seen on both AIS and radar alarms once (the Target Fusion plugin links
 the two). When that plugin is stopped or missing, the alarms here come back on
 their own. The App Store lists both plugins as recommended alongside this one:
-install signalk-collision-alerts for one set of alarms across AIS and radar,
+install @signalk/collision-alerts for one set of alarms across AIS and radar,
 and signalk-target-fusion so a ship on both is one target.
 
 ## Features

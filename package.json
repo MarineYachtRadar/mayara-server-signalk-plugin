@@ -43,7 +43,7 @@
       "signalk-container"
     ],
     "recommends": [
-      "signalk-collision-alerts",
+      "@signalk/collision-alerts",
       "signalk-target-fusion"
     ]
   },
