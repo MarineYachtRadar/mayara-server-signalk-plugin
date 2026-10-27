@@ -384,9 +384,8 @@ export default function (app: MayaraServerAPI): Plugin {
         next()
       })
       // Watching the radar only reads, so read-only users may open the GUI as
-      // well as admins. A control change from the GUI reaches Signal K's own
-      // radar API through this proxy, which checks the user's write
-      // permission itself. A server without access() keeps the GUI admin-only.
+      // well as admins; changing a control from it stays admin-only. A server
+      // without access() keeps the whole GUI admin-only.
       const passOn: RequestHandler = (_req, _res, next) => {
         next()
       }
