@@ -540,7 +540,9 @@ export default function (app: MayaraServerAPI): Plugin {
       })
 
       router.get('/api/gui-url', (req: Request, res: Response) => {
-        if (!currentSettings?.directGuiUrl) {
+        // mayara's own port takes control changes without authentication, so
+        // only an admin is sent there; read-only users stay on the proxy.
+        if (!currentSettings?.directGuiUrl || !isAdmin(req)) {
           res.json({ url: `${GUI_PROXY_PATH}/` })
           return
         }
@@ -1516,6 +1518,13 @@ export default function (app: MayaraServerAPI): Plugin {
   }
 
   return plugin
+}
+
+/** Whether Signal K let this request in as an admin. With security off
+ * there is no principal, and everyone may do everything. */
+function isAdmin(req: Request): boolean {
+  const principal = (req as Request & { skPrincipal?: { permissions?: string } }).skPrincipal
+  return principal === undefined || principal.permissions === 'admin'
 }
 
 function errMsg(err: unknown): string {
