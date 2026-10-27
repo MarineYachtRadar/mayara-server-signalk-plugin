@@ -1,5 +1,5 @@
-import { Plugin, ActionResult } from '@signalk/server-api'
-import { Request, Response, IRouter } from 'express'
+import { Plugin, ActionResult, type PluginRouter } from '@signalk/server-api'
+import { Request, Response, IRouter, type RequestHandler } from 'express'
 import { type IncomingMessage } from 'http'
 import { Server as NetServer, type Socket } from 'net'
 import {
@@ -288,7 +288,7 @@ export default function (app: MayaraServerAPI): Plugin {
       app.setPluginStatus('Stopped')
     },
 
-    registerWithRouter(router: IRouter) {
+    registerWithRouter(router: IRouter & Partial<Pick<PluginRouter, 'access'>>) {
       // Same-origin reverse proxy to mayara-server's :6502. The icon
       // click in the SK admin lands on the splash page (public/
       // index.html), which redirects to `${GUI_PROXY_PATH}/`. From
@@ -383,6 +383,18 @@ export default function (app: MayaraServerAPI): Plugin {
         }
         next()
       })
+      // Watching the radar only reads, so read-only users may open the GUI as
+      // well as admins. A control change from the GUI reaches Signal K's own
+      // radar API through this proxy, which checks the user's write
+      // permission itself. A server without access() keeps the GUI admin-only.
+      const passOn: RequestHandler = (_req, _res, next) => {
+        next()
+      }
+      router
+        .access?.('readonly')
+        .get('/gui', passOn)
+        .get('/gui/*', passOn)
+        .get('/api/gui-url', passOn)
       router.use('/gui', (req: Request, res: Response) => {
         guiProxy.web(req, res)
       })

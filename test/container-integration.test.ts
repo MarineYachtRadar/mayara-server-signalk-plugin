@@ -1548,6 +1548,37 @@ describe('mayara-server-signalk-plugin container integration', () => {
       expect(router.mounts).toContain('/gui')
       await plugin.stop()
     })
+
+    // On a server with read-only access enabled, visitors who may only
+    // read (a public demo, a crew tablet) must be able to watch the radar;
+    // everything else stays admin-only.
+    it('opens only the GUI and its URL to read-only users', async () => {
+      const opened: string[] = []
+      const router = makeRouter()
+      const scoped = {
+        get: (path: string) => {
+          opened.push(`GET ${path}`)
+          return scoped
+        }
+      }
+      const accessRouter = {
+        ...router,
+        access: (level: string) => {
+          expect(level).toBe('readonly')
+          return scoped
+        }
+      }
+      vi.resetModules()
+      const mod = (await import('../src/index.js')) as unknown as {
+        default: (a: unknown) => LoadedPlugin['plugin']
+      }
+      const plugin = mod.default(makeMockApp())
+      plugin.registerWithRouter(accessRouter)
+
+      expect(opened).toEqual(['GET /gui', 'GET /gui/*', 'GET /api/gui-url'])
+      expect(router.mounts).toContain('/gui')
+      await plugin.stop()
+    })
   })
 
   describe('GET /api/gui-url', () => {
