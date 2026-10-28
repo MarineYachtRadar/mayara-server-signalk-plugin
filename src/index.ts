@@ -1,5 +1,5 @@
-import { Plugin, ActionResult } from '@signalk/server-api'
-import { Request, Response, IRouter } from 'express'
+import { Plugin, ActionResult, type PluginRouter } from '@signalk/server-api'
+import { Request, Response, IRouter, type RequestHandler } from 'express'
 import { type IncomingMessage } from 'http'
 import { Server as NetServer, type Socket } from 'net'
 import {
@@ -288,7 +288,7 @@ export default function (app: MayaraServerAPI): Plugin {
       app.setPluginStatus('Stopped')
     },
 
-    registerWithRouter(router: IRouter) {
+    registerWithRouter(router: IRouter & Partial<Pick<PluginRouter, 'access'>>) {
       // Same-origin reverse proxy to mayara-server's :6502. The icon
       // click in the SK admin lands on the splash page (public/
       // index.html), which redirects to `${GUI_PROXY_PATH}/`. From
@@ -383,6 +383,17 @@ export default function (app: MayaraServerAPI): Plugin {
         }
         next()
       })
+      // Watching the radar only reads, so read-only users may open the GUI as
+      // well as admins; changing a control from it stays admin-only. A server
+      // without access() keeps the whole GUI admin-only.
+      const passOn: RequestHandler = (_req, _res, next) => {
+        next()
+      }
+      router
+        .access?.('readonly')
+        .get('/gui', passOn)
+        .get('/gui/*', passOn)
+        .get('/api/gui-url', passOn)
       router.use('/gui', (req: Request, res: Response) => {
         guiProxy.web(req, res)
       })
@@ -529,7 +540,9 @@ export default function (app: MayaraServerAPI): Plugin {
       })
 
       router.get('/api/gui-url', (req: Request, res: Response) => {
-        if (!currentSettings?.directGuiUrl) {
+        // mayara's own port takes control changes without authentication, so
+        // only an admin is sent there; read-only users stay on the proxy.
+        if (!currentSettings?.directGuiUrl || !isAdmin(req)) {
           res.json({ url: `${GUI_PROXY_PATH}/` })
           return
         }
@@ -1505,6 +1518,13 @@ export default function (app: MayaraServerAPI): Plugin {
   }
 
   return plugin
+}
+
+/** Whether Signal K let this request in as an admin. With security off
+ * there is no principal, and everyone may do everything. */
+function isAdmin(req: Request): boolean {
+  const principal = (req as Request & { skPrincipal?: { permissions?: string } }).skPrincipal
+  return principal === undefined || principal.permissions === 'admin'
 }
 
 function errMsg(err: unknown): string {

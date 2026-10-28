@@ -1548,6 +1548,45 @@ describe('mayara-server-signalk-plugin container integration', () => {
       expect(router.mounts).toContain('/gui')
       await plugin.stop()
     })
+
+    // On a server with read-only access enabled, visitors who may only
+    // read (a public demo, a crew tablet) must be able to watch the radar;
+    // everything else, control changes included, stays admin-only.
+    it('opens only reading the GUI and its URL to read-only users', async () => {
+      const opened = new Map<string, (req: unknown, res: unknown, next: () => void) => void>()
+      const router = makeRouter()
+      const scoped = {
+        get: (path: string, handler: (req: unknown, res: unknown, next: () => void) => void) => {
+          opened.set(`GET ${path}`, handler)
+          return scoped
+        }
+      }
+      const levels: string[] = []
+      vi.resetModules()
+      const mod = (await import('../src/index.js')) as unknown as {
+        default: (a: unknown) => LoadedPlugin['plugin']
+      }
+      const plugin = mod.default(makeMockApp())
+      plugin.registerWithRouter({
+        ...router,
+        access: (level: string) => {
+          levels.push(level)
+          return scoped
+        }
+      })
+
+      expect(levels).toEqual(['readonly'])
+      expect([...opened.keys()]).toEqual(['GET /gui', 'GET /gui/*', 'GET /api/gui-url'])
+      // Each opened route only lets the request on to the proxy or the
+      // handler registered for everyone.
+      for (const handler of opened.values()) {
+        const next = vi.fn()
+        handler({}, makeRes(), next)
+        expect(next).toHaveBeenCalledOnce()
+      }
+      expect(router.mounts).toContain('/gui')
+      await plugin.stop()
+    })
   })
 
   describe('GET /api/gui-url', () => {
@@ -1555,6 +1594,30 @@ describe('mayara-server-signalk-plugin container integration', () => {
       const { router, plugin } = await loadPlugin({ port: 6502 })
       const res = makeRes()
       await getHandler(router, 'GET /api/gui-url')({ hostname: 'boat.local' }, res)
+      expect(res.body).toEqual({ url: 'http://boat.local:6502/gui/' })
+      await plugin.stop()
+    })
+
+    // mayara's own port takes control changes without authentication, so a
+    // read-only user who could open the GUI must not be sent there.
+    it('sends a read-only user to the proxy even when directGuiUrl is on', async () => {
+      const { router, plugin } = await loadPlugin({ directGuiUrl: true })
+      const res = makeRes()
+      await getHandler(router, 'GET /api/gui-url')(
+        { hostname: 'boat.local', skPrincipal: { identifier: 'AUTO', permissions: 'readonly' } },
+        res
+      )
+      expect(res.body).toEqual({ url: '/plugins/mayara-server-signalk-plugin/gui/' })
+      await plugin.stop()
+    })
+
+    it('sends an admin to mayara directly when directGuiUrl is on', async () => {
+      const { router, plugin } = await loadPlugin({ directGuiUrl: true, port: 6502 })
+      const res = makeRes()
+      await getHandler(router, 'GET /api/gui-url')(
+        { hostname: 'boat.local', skPrincipal: { identifier: 'admin', permissions: 'admin' } },
+        res
+      )
       expect(res.body).toEqual({ url: 'http://boat.local:6502/gui/' })
       await plugin.stop()
     })
