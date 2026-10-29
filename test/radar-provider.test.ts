@@ -26,7 +26,7 @@ function createMockClient(overrides: Partial<MayaraClient> = {}): MayaraClient {
     }),
     setControl: vi.fn().mockResolvedValue({ success: true }),
     setControls: vi.fn().mockResolvedValue({ success: true }),
-    getTargets: vi.fn().mockResolvedValue({ targets: [] }),
+    getTargets: vi.fn().mockResolvedValue([{ id: 3, status: 'tracking' }]),
     acquireTarget: vi.fn().mockResolvedValue({ targetId: 1, radarId: 'radar-0' }),
     cancelTarget: vi.fn().mockResolvedValue({}),
     getSpokeStreamUrl: vi
@@ -219,6 +219,18 @@ describe('createRadarProvider', () => {
 
     const result = await provider.acquireTarget?.('radar-0', 45.0, 1000)
     expect(result).toEqual({ success: true, targetId: 1 })
+  })
+
+  it("getTargets wraps mayara's target array in the Radar API list", async () => {
+    const client = createMockClient()
+    const provider = createRadarProvider(client, createMockApp())
+
+    const result = await provider.getTargets?.('radar-0')
+    expect(result).toMatchObject({
+      radarId: 'radar-0',
+      targets: [{ id: 3, status: 'tracking' }]
+    })
+    expect(Number.isNaN(Date.parse(result?.timestamp ?? ''))).toBe(false)
   })
 
   it('cancelTarget returns true on success', async () => {
