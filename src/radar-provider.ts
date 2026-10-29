@@ -227,7 +227,9 @@ export function createRadarProvider(
 
     async getTargets(radarId: string): Promise<radar.TargetListResponse | null> {
       try {
-        return (await client.getTargets(radarId)) as radar.TargetListResponse | null
+        // mayara answers with the bare target array; the Radar API wraps it.
+        const targets = (await client.getTargets(radarId)) as radar.ArpaTarget[]
+        return { radarId, timestamp: new Date().toISOString(), targets }
       } catch (err) {
         debug(
           `getTargets error for ${radarId}: ${err instanceof Error ? err.message : String(err)}`
