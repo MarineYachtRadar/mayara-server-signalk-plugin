@@ -41,6 +41,7 @@ export interface AlarmSink {
 // Its runtime object lives in @signalk/server-api, which this plugin uses
 // for types only, so the level is narrowed to the enum type here instead.
 function toAlarmState(level: AlertLevel): ALARM_STATE {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-enum-assignment
   return level as ALARM_STATE
 }
 
