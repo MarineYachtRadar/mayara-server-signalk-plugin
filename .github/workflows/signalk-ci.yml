@@ -1,8 +1,7 @@
-# Temporary — testing the new SignalK Plugin CI reusable workflow
-# from dirkwa/signalk-server PR #2400
-# Remove this file once the PR is merged and use the caller example instead
+# Signal K server's reusable plugin CI: build, tests and formatting on every supported Node, and
+# the plugin loaded in a running Signal K server.
 
-name: Test SignalK Plugin CI
+name: SignalK Plugin CI
 
 on:
   push:
@@ -15,6 +14,8 @@ jobs:
   test:
     uses: SignalK/signalk-server/.github/workflows/plugin-ci.yml@master
     with:
+      # engines.node is >=22.15; 26 is the current release
+      node-versions: '["22", "24", "26"]'
       enable-armv7: false
       enable-signalk-integration: true
       format-check-command: npm run format:check
