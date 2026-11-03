@@ -19,3 +19,14 @@ jobs:
       enable-armv7: false
       enable-signalk-integration: true
       format-check-command: npm run format:check
+
+  # The plugin CI runs lint but lets it fail; here it blocks.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - run: npm install --no-audit --no-fund
+      - run: npm run lint
