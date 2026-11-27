@@ -18,8 +18,8 @@ jobs:
     # Pinned: the called workflow runs with this repository's token. Dependabot bumps it.
     uses: SignalK/signalk-server/.github/workflows/plugin-ci.yml@15c5e79758799dd826c053eda8f09b0248706ebd # master
     with:
-      # engines.node is >=22.15; 26 is the current release
-      node-versions: '["22", "24", "26"]'
+      # engines.node is >=24; 26 is the current release
+      node-versions: '["24", "26"]'
       enable-armv7: false
       enable-signalk-integration: true
       format-check-command: npm run format:check
