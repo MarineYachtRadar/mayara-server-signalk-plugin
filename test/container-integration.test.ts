@@ -816,6 +816,53 @@ describe('mayara-server-signalk-plugin container integration', () => {
       await plugin.stop()
     })
 
+    it('starts the container when detection outlasts one wait', async () => {
+      const { containers, plugin, findRuntime } = await startWithoutRuntime()
+      let finishDetection = () => {}
+      containers.whenReady = vi.fn(
+        () => new Promise<void>((resolve) => (finishDetection = resolve))
+      )
+      await vi.advanceTimersByTimeAsync(45_000)
+      expect(containers._calls.ensureRunning.length).toBe(0)
+
+      findRuntime()
+      finishDetection()
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(containers._calls.ensureRunning.length).toBe(1)
+      await plugin.stop()
+    })
+
+    it('does not carry on with a start that stopped while the container was starting', async () => {
+      const { containers, plugin, findRuntime } = await startWithoutRuntime()
+      let containerUp = () => {}
+      containers.ensureRunning = vi.fn(
+        () => new Promise<void>((resolve) => (containerUp = resolve))
+      )
+      findRuntime()
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(containers.ensureRunning).toHaveBeenCalledTimes(1)
+
+      await plugin.stop()
+      containerUp()
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(containers._calls.updateRegistrations.length).toBe(0)
+    })
+
+    it('stops waiting while detection is still running', async () => {
+      const { containers, plugin, findRuntime } = await startWithoutRuntime()
+      let finishDetection = () => {}
+      containers.whenReady = vi.fn(
+        () => new Promise<void>((resolve) => (finishDetection = resolve))
+      )
+      await vi.advanceTimersByTimeAsync(10_000)
+      await plugin.stop()
+
+      findRuntime()
+      finishDetection()
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(containers._calls.ensureRunning.length).toBe(0)
+    })
+
     it('stops waiting for a runtime when the plugin stops', async () => {
       const { containers, plugin, errors, findRuntime } = await startWithoutRuntime()
       await plugin.stop()
