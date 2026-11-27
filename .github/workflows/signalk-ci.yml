@@ -15,8 +15,7 @@ permissions:
 
 jobs:
   test:
-    # Pinned: the called workflow runs with this repository's token. Dependabot bumps it.
-    uses: SignalK/signalk-server/.github/workflows/plugin-ci.yml@15c5e79758799dd826c053eda8f09b0248706ebd # master
+    uses: SignalK/signalk-server/.github/workflows/plugin-ci.yml@master
     with:
       # engines.node is >=24; 26 is the current release
       node-versions: '["24", "26"]'
