@@ -74,6 +74,7 @@ function makeApp(opts: { withSetDefaultMetadata?: boolean } = {}): {
       rec.putPaths.push(path)
     }),
     radarApi: { register: vi.fn(), unRegister: vi.fn() },
+    registerResourceProvider: vi.fn(),
     binaryStreamManager: undefined
   }
   if (opts.withSetDefaultMetadata !== false) {

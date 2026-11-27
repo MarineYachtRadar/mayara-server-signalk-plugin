@@ -224,6 +224,7 @@ interface MockApp {
   getDataDirPath: () => string
   savePluginOptions: ReturnType<typeof vi.fn>
   radarApi: { register: ReturnType<typeof vi.fn>; unRegister: ReturnType<typeof vi.fn> }
+  registerResourceProvider: ReturnType<typeof vi.fn>
   binaryStreamManager: undefined
   // Mirrors signalk-server's runtime `app.config`. The public
   // `@signalk/server-api` types don't declare it, so the plugin reads it
@@ -254,6 +255,7 @@ function makeMockApp(config?: MockApp['config']): MockApp {
       register: vi.fn(),
       unRegister: vi.fn()
     },
+    registerResourceProvider: vi.fn(),
     binaryStreamManager: undefined
   }
 }
@@ -1535,6 +1537,16 @@ describe('mayara-server-signalk-plugin container integration', () => {
       expect(app.error).not.toHaveBeenCalled()
       const statuses = app.setPluginStatus.mock.calls.map((c) => c[0] as string)
       expect(statuses).toContain('Connected - 0 radar(s)')
+      await plugin.stop()
+    })
+  })
+
+  describe('Plotter Extensions', () => {
+    it('offers the radar picture to chartplotters while it runs', async () => {
+      const { app, plugin } = await loadPlugin()
+      expect(app.registerResourceProvider).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'plotterExtensions' })
+      )
       await plugin.stop()
     })
   })
