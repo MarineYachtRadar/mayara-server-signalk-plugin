@@ -55,6 +55,9 @@ const RADAR_TARGET_EXPIRY_INTERVAL_MS = 5_000
 // Keeps the browser on the SK port (3000 / 443), so HTTPS works and
 // only one firewall port needs to be open.
 const GUI_PROXY_PATH = `/plugins/${PLUGIN_ID}/gui`
+// mayara-server learned `--no-mdns` in this release; older images reject it.
+const NO_MDNS_SINCE: readonly [number, number, number] = [3, 9, 0]
+const MDNS_ARGS = new Set(['--no-mdns', '--mdns-hostname'])
 
 /**
  * Where `signalkDataMount` lands inside the container. signalk-container
@@ -838,6 +841,16 @@ export default function (app: MayaraServerAPI): Plugin {
       }
     }
 
+    // The container shares the host's network, where Avahi usually answers
+    // mDNS already. A second responder on UDP 5353 takes unicast queries
+    // meant for Avahi (Linux hands each to one socket only), and nothing
+    // needs mayara's own announcement here: its GUI is reached through
+    // Signal K.
+    const userSetsMdns = userArgs.some((a) => MDNS_ARGS.has(a.split('=')[0]))
+    if (!userSetsMdns && acceptsNoMdns(tag)) {
+      injected.push('--no-mdns')
+    }
+
     const command = ['mayara-server', ...injected, ...userArgs]
 
     const config: ContainerConfig = {
@@ -1531,4 +1544,15 @@ function isAdmin(req: Request): boolean {
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
+}
+
+/** A floating tag (`latest`, `main`, …) always tracks a release that has it. */
+function acceptsNoMdns(tag: string): boolean {
+  const pinned = /^v?(\d+)\.(\d+)\.(\d+)/.exec(tag)
+  if (!pinned) return true
+  const version = pinned.slice(1, 4).map(Number)
+  for (let i = 0; i < NO_MDNS_SINCE.length; i++) {
+    if (version[i] !== NO_MDNS_SINCE[i]) return version[i] > NO_MDNS_SINCE[i]
+  }
+  return true
 }

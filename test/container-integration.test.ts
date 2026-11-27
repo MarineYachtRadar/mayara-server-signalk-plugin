@@ -540,11 +540,43 @@ describe('mayara-server-signalk-plugin container integration', () => {
         'mayara-server',
         '-n',
         expect.stringMatching(/^tcp:127\.0\.0\.1:\d+$/),
+        '--no-mdns',
         '--brand',
         'furuno'
       ])
       await plugin.stop()
     })
+
+    // Host networking puts mayara's mDNS responder next to the host's Avahi.
+    it.each(['latest', 'main', 'v3.9.0', '3.17.6'])(
+      'leaves mDNS to the host on mayara %s',
+      async (mayaraVersion) => {
+        const { containers, plugin } = await loadPlugin({ mayaraVersion })
+        expect(containers._calls.ensureRunning[0].config.command).toContain('--no-mdns')
+        await plugin.stop()
+      }
+    )
+
+    it.each(['v3.8.2', '3.4.0'])(
+      'does not pass --no-mdns to mayara %s, which rejects it',
+      async (mayaraVersion) => {
+        const { containers, plugin } = await loadPlugin({ mayaraVersion })
+        expect(containers._calls.ensureRunning[0].config.command).not.toContain('--no-mdns')
+        await plugin.stop()
+      }
+    )
+
+    it.each([['--mdns-hostname', 'radar'], ['--mdns-hostname=radar'], ['--no-mdns']])(
+      'keeps the mDNS choice the user made in mayaraArgs (%s)',
+      async (...mayaraArgs) => {
+        const { containers, plugin } = await loadPlugin({ mayaraArgs })
+        const { command } = containers._calls.ensureRunning[0].config
+        expect(command?.filter((a) => a === '--no-mdns').length).toBe(
+          mayaraArgs.includes('--no-mdns') ? 1 : 0
+        )
+        await plugin.stop()
+      }
+    )
 
     it('does NOT auto-inject -n when user already passed it', async () => {
       const { containers, plugin } = await loadPlugin({
