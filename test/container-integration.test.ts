@@ -150,8 +150,7 @@ function makeMockContainerManager(): MockContainerManager {
     _nextCheckResult: null,
     getRuntime: () => ({
       runtime: 'podman',
-      version: '5.0.0',
-      isPodmanDockerShim: false
+      version: '5.0.0'
     }),
     whenReady: vi.fn(() => Promise.resolve()),
     pullImage: vi.fn((image: string) => {
@@ -578,7 +577,7 @@ describe('mayara-server-signalk-plugin container integration', () => {
       const containers = makeMockContainerManager()
       let settled = false
       containers.getRuntime = vi.fn(() =>
-        settled ? { runtime: 'podman' as const, version: '5.0.0', isPodmanDockerShim: false } : null
+        settled ? { runtime: 'podman' as const, version: '5.0.0' } : null
       )
       containers.whenReady = vi.fn(() => {
         settled = true

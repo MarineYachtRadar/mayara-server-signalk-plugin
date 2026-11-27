@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import http from 'http'
+import type { Socket } from 'net'
 import { gzipSync } from 'zlib'
 import { WebSocketServer, WebSocket } from 'ws'
 import { createGuiProxy, type GuiProxyOptions, type ProxiedRequest } from '../src/gui-proxy.js'
@@ -84,8 +85,8 @@ async function front(options: GuiProxyOptions, parseJson = false): Promise<numbe
       proxy.web(req, res)
     })
   })
-  server.on('upgrade', (req: http.IncomingMessage, socket, head: Buffer) => {
-    proxy.upgrade(req, socket as import('net').Socket, head)
+  server.on('upgrade', (req: http.IncomingMessage, socket: Socket, head: Buffer) => {
+    proxy.upgrade(req, socket, head)
   })
   return listen(server)
 }
