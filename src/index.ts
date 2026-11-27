@@ -10,6 +10,7 @@ import {
 import { MayaraClient } from './mayara-client.js'
 import { createGuiProxy } from './gui-proxy.js'
 import { createRadarProvider } from './radar-provider.js'
+import { buildPlotterManifest, registerPlotterExtension } from './plotter-extension.js'
 import { SpokeForwarder } from './spoke-forwarder.js'
 import { DeltaForwarder } from './delta-forwarder.js'
 import { DeltaAlarmSink, ManagedAlarmSink, type AlarmSink } from './collision/alarms.js'
@@ -202,6 +203,7 @@ export default function (app: MayaraServerAPI): Plugin {
       // start launches is live.
       tokenGeneration++
       collisionAlerts.start(app)
+      registerPlotterExtension(app, PLUGIN_ID, buildPlotterManifest(GUI_PROXY_PATH))
       void asyncStart(merged).catch((err: unknown) => {
         app.setPluginError(`Startup failed: ${err instanceof Error ? err.message : String(err)}`)
       })
