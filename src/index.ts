@@ -1160,7 +1160,7 @@ export default function (app: MayaraServerAPI): Plugin {
     // and ports. Resources follow the live-update path. No local hash
     // tracking needed.
     await containers.ensureRunning(CONTAINER_NAME, config)
-    if (signal.aborted) return
+    signal.throwIfAborted()
 
     // Kick off Signal K device-token acquisition in the background. The
     // container is already running with whatever transport the cached
