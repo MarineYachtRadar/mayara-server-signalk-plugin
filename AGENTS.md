@@ -87,7 +87,7 @@ When mayara grows the status model, this plugin must **forward the new fields ve
 
 ### TypeScript tooling
 
-The repo has no JavaScript sources: the build script, the e2e harness and the tool configs are TypeScript too. Node runs `build.ts` and the harness directly by stripping their types, which is on by default from Node 22.18 and in 24, so working on the repo needs one of those. The published plugin is compiled and still runs on the `engines` floor. ESLint loads `eslint.config.ts` through `jiti`, and Prettier loads `prettier.config.ts` natively. `tsconfig.tools.json` type-checks all of it with `erasableSyntaxOnly` and `verbatimModuleSyntax`, so syntax Node cannot strip, or a type import not marked `import type`, fails `npm run build` rather than the script itself.
+The repo has no JavaScript sources: the build script, the e2e harness and the tool configs are TypeScript too. Node runs `build.ts` and the harness directly by stripping their types, which is on by default in Node 24, the `engines` floor. ESLint loads `eslint.config.ts` through `jiti`, and Prettier loads `prettier.config.ts` natively. `tsconfig.tools.json` type-checks all of it with `erasableSyntaxOnly` and `verbatimModuleSyntax`, so syntax Node cannot strip, or a type import not marked `import type`, fails `npm run build` rather than the script itself.
 
 ### End-to-end harness
 
@@ -162,7 +162,7 @@ No `Co-Authored-By` lines. No "Generated with Claude Code" attribution.
 
 ## CI / publishing
 
-- **Plugin CI** (`.github/workflows/signalk-ci.yml`) calls the upstream `SignalK/signalk-server` reusable workflow. It runs on push to `main`, on pull_request to `main`, and on `workflow_dispatch`. PR runs surface as checks on the PR itself; the push-to-main run still covers post-merge verification.
+- **Plugin CI** (`.github/workflows/signalk-ci.yml`) calls the upstream `SignalK/signalk-server` reusable workflow on Node 24 and 26. Its lint step may fail without failing the run, so a separate `lint` job blocks on `npm run lint`. It runs on push to `main`, on pull_request to `main`, and on `workflow_dispatch`. PR runs surface as checks on the PR itself; the push-to-main run still covers post-merge verification.
 - **release-please** (`.github/workflows/release-please.yml`) runs on push to `main` and on `workflow_dispatch` — see [Releases](#releases). A `gate` job stops it for pushes with nothing releasable. Its regex must keep matching `pull-request-title-pattern` in `release-please-config.json` (`chore(release): ${version}`): if the release PR's own merge stops matching, no tag is ever created. The title also has to stay in `.coderabbit.yaml`'s `ignore_title_keywords`.
 - **Publish** (`.github/workflows/publish.yml`) is dispatched by release-please on each release tag, and also fires on a hand-pushed `v*` tag (creating the GitHub Release itself in that case). It refuses a tag that doesn't name `package.json`'s version, then `npm publish`es via OIDC trusted publishing.
 - **No `NPM_TOKEN` secret exists or is needed.** Trusted publishing is configured on npm for `publish.yml` specifically — do not rename it or publish from another workflow, and do not add `NODE_AUTH_TOKEN`. A tag created with `GITHUB_TOKEN` starts no workflow, which is why release-please dispatches `publish.yml` rather than relying on the tag trigger.
@@ -276,7 +276,7 @@ The mayara GUI is proxied through Signal K at `/plugins/<id>/gui/` so only the S
 
 - Signal K Server ≥ 2.31.0 (v3.4.0 Radar API requirement; the lean `RadarInfo` and the `{ version, radars }` list land in 2.31.0)
 - signalk-container ≥ 1.6.0 (declared in `signalk.requires`; intentionally **not** an npm `peerDependency`. It's a cross-plugin runtime dependency discovered at runtime via `globalThis.__signalk_containerManager` and installed through Signal K's appstore, not something npm should resolve. Declaring it as a peer made npm enforce the version range, which broke `@beta`/prerelease installs with ERESOLVE because npm excludes prereleases from plain `>=` ranges.)
-- Node ≥ engines floor in `package.json` (CI matrix tests Node 22 and 24)
+- Node ≥ engines floor in `package.json` (CI matrix tests Node 24 and 26)
 - **`httpxy`, not `http-proxy-middleware`.** The middleware pulls in `micromatch` → `braces`, which carries a high-severity advisory (CVE-2026-93687) with no fixed release, and the Signal K plugin registry deducts 10 points for any high finding in the installed tree. `httpxy` is the proxy engine the middleware wraps, with no dependencies of its own; `src/gui-proxy.ts` provides the pieces the middleware used to.
 - **`typebox`, not `@sinclair/typebox`.** TypeBox 1.x ships as the _unscoped_
   `typebox` package; the scoped one is a different package frozen at 0.34.x. It
