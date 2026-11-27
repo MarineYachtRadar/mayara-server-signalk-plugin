@@ -6,7 +6,8 @@ import {
   getContainerManager as helperGetContainerManager,
   waitForContainerManager,
   isValidImageTag,
-  classifyTag
+  classifyTag,
+  retryForever
 } from 'signalk-container-helper'
 import { MayaraClient } from './mayara-client.js'
 import { createGuiProxy } from './gui-proxy.js'
@@ -59,6 +60,9 @@ const GUI_PROXY_PATH = `/plugins/${PLUGIN_ID}/gui`
 const NO_MDNS_FLAG = '--no-mdns'
 const MDNS_HELP_TIMEOUT_S = 30
 const MDNS_ARGS = new Set([NO_MDNS_FLAG, '--mdns-hostname'])
+const CONTAINER_MANAGER_WAIT_MS = 30_000
+const CONTAINER_MANAGER_RETRY_MIN_MS = 5_000
+const CONTAINER_MANAGER_RETRY_MAX_MS = 60_000
 
 /**
  * Where `signalkDataMount` lands inside the container. signalk-container
@@ -163,6 +167,8 @@ export default function (app: MayaraServerAPI): Plugin {
   // rejects an argument never starts. Kept per tag, so an update to another
   // tag cannot replace what the running tag's probe found.
   const noMdnsSupport = new Map<string, boolean>()
+  // Ends the wait for signalk-container that the start it belongs to began.
+  let startAbort = new AbortController()
   let reconnectInterval: ReturnType<typeof setInterval> | null = null
   let isConnected = false
   // Appended to the "Connected" status line when a newer container image
@@ -211,9 +217,12 @@ export default function (app: MayaraServerAPI): Plugin {
       // start (a fast disable/enable or config save) so only the loop this
       // start launches is live.
       tokenGeneration++
+      startAbort = new AbortController()
+      const { signal } = startAbort
       collisionAlerts.start(app)
       registerPlotterExtension(app, PLUGIN_ID, buildPlotterManifest(GUI_PROXY_PATH))
-      void asyncStart(merged).catch((err: unknown) => {
+      void asyncStart(merged, signal).catch((err: unknown) => {
+        if (signal.aborted) return
         app.setPluginError(`Startup failed: ${err instanceof Error ? err.message : String(err)}`)
       })
     },
@@ -225,6 +234,7 @@ export default function (app: MayaraServerAPI): Plugin {
       // superseded and exits on its next check, without keeping the process
       // alive after stop() returns.
       tokenGeneration++
+      startAbort.abort()
 
       try {
         app.radarApi.unRegister(PLUGIN_ID)
@@ -1124,34 +1134,13 @@ export default function (app: MayaraServerAPI): Plugin {
   }
 
   /** Resolves false when a stop() or a newer start() superseded this start. */
-  async function startManagedContainer(settings: Partial<Config>): Promise<boolean> {
+  async function startManagedContainer(
+    settings: Partial<Config>,
+    signal: AbortSignal
+  ): Promise<boolean> {
     const myGeneration = tokenGeneration
-    // Two-phase wait (global appears → runtime detection settles), from
-    // signalk-container-helper. Unlike the hand-rolled version this replaced,
-    // it distinguishes "signalk-container absent" from "present but no usable
-    // podman/docker", which are different operator problems.
-    const { manager: containers, runtime } = await waitForContainerManager({
-      timeoutMs: 30000,
-      onWaiting: (phase) => {
-        app.setPluginStatus(
-          phase === 'manager'
-            ? 'Waiting for signalk-container plugin to load...'
-            : 'Waiting for container runtime detection...'
-        )
-      }
-    })
-    if (!containers) {
-      app.setPluginError(
-        'signalk-container plugin required for managed mode. Install it or set managedContainer=false.'
-      )
-      throw new Error('Container manager not available')
-    }
-    if (!runtime) {
-      app.setPluginError(
-        'signalk-container found no usable container runtime (podman/docker). Check its status.'
-      )
-      throw new Error('No container runtime detected')
-    }
+    const containers = await waitForUsableContainerManager(signal)
+    if (signal.aborted) return false
 
     app.debug('Container runtime ready, starting mayara-server')
     app.setPluginStatus('Starting mayara-server container...')
@@ -1216,13 +1205,59 @@ export default function (app: MayaraServerAPI): Plugin {
     return true
   }
 
+  /**
+   * Waits until signalk-container is loaded and has found podman or docker.
+   * On a cold boot podman's detection can outlast one wait, and a plugin
+   * that gave up would leave the radar off until someone restarts it, so
+   * the wait goes on, with the reason on the status line, until stop().
+   */
+  async function waitForUsableContainerManager(signal: AbortSignal): Promise<ContainerManagerApi> {
+    return retryForever(
+      async () => {
+        // Two-phase wait from signalk-container-helper: it tells
+        // "signalk-container absent" apart from "present but no usable
+        // podman/docker", which are different operator problems.
+        const { manager, runtime } = await waitForContainerManager({
+          timeoutMs: CONTAINER_MANAGER_WAIT_MS,
+          signal,
+          onWaiting: (phase) => {
+            app.setPluginStatus(
+              phase === 'manager'
+                ? 'Waiting for signalk-container plugin to load...'
+                : 'Waiting for container runtime detection...'
+            )
+          }
+        })
+        if (!manager) {
+          throw new Error(
+            'signalk-container plugin required for managed mode. Install it or set managedContainer=false.'
+          )
+        }
+        if (!runtime) {
+          throw new Error(
+            'signalk-container found no usable container runtime (podman/docker). Check its status.'
+          )
+        }
+        return manager
+      },
+      {
+        signal,
+        minDelayMs: CONTAINER_MANAGER_RETRY_MIN_MS,
+        maxDelayMs: CONTAINER_MANAGER_RETRY_MAX_MS,
+        onAttemptFailed: (err, nextDelayMs) => {
+          app.setPluginError(`${errMsg(err)} Checking again in ${nextDelayMs / 1000} s.`)
+        }
+      }
+    )
+  }
+
   // ==========================================================================
   // Plugin lifecycle
   // ==========================================================================
 
-  async function asyncStart(settings: Partial<Config>): Promise<void> {
+  async function asyncStart(settings: Partial<Config>, signal: AbortSignal): Promise<void> {
     if (settings.managedContainer) {
-      if (!(await startManagedContainer(settings))) return
+      if (!(await startManagedContainer(settings, signal))) return
     }
 
     client = new MayaraClient({
