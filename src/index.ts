@@ -1119,7 +1119,9 @@ export default function (app: MayaraServerAPI): Plugin {
     )
   }
 
-  async function startManagedContainer(settings: Partial<Config>): Promise<void> {
+  /** Resolves false when a stop() or a newer start() superseded this start. */
+  async function startManagedContainer(settings: Partial<Config>): Promise<boolean> {
+    const myGeneration = tokenGeneration
     // Two-phase wait (global appears → runtime detection settles), from
     // signalk-container-helper. Unlike the hand-rolled version this replaced,
     // it distinguishes "signalk-container absent" from "present but no usable
@@ -1152,6 +1154,9 @@ export default function (app: MayaraServerAPI): Plugin {
 
     const tag = settings.mayaraVersion ?? 'latest'
     await probeNoMdnsSupport(containers, tag)
+    // The probe can take a pull plus a 30 s job; a stop() in that time must
+    // not be undone by starting the container it just stopped.
+    if (myGeneration !== tokenGeneration) return false
     const config = buildContainerConfig(tag)
 
     // signalk-container ≥1.6.0 diffs ContainerConfig against the live
@@ -1202,6 +1207,7 @@ export default function (app: MayaraServerAPI): Plugin {
     }
 
     app.debug('mayara-server container ready')
+    return true
   }
 
   // ==========================================================================
@@ -1210,7 +1216,7 @@ export default function (app: MayaraServerAPI): Plugin {
 
   async function asyncStart(settings: Partial<Config>): Promise<void> {
     if (settings.managedContainer) {
-      await startManagedContainer(settings)
+      if (!(await startManagedContainer(settings))) return
     }
 
     client = new MayaraClient({

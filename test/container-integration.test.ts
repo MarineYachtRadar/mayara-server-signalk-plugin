@@ -615,6 +615,35 @@ describe('mayara-server-signalk-plugin container integration', () => {
       await plugin.stop()
     })
 
+    it('starts nothing once stopped while the image is being asked', async () => {
+      const containers = makeMockContainerManager()
+      let finishHelp: () => void = () => undefined
+      containers.runJob = vi.fn(
+        () =>
+          new Promise((resolve) => {
+            finishHelp = () => {
+              resolve({ status: 'completed' as const, exitCode: 0, log: ['--no-mdns'] })
+            }
+          })
+      )
+      globalThis.__signalk_containerManager = containers
+      const app = makeMockApp()
+      vi.resetModules()
+      const mod = (await import('../src/index.js')) as unknown as {
+        default: (a: unknown) => LoadedPlugin['plugin']
+      }
+      const plugin = mod.default(app)
+      plugin.start({ managedContainer: true, mayaraVersion: 'latest', requestSignalkToken: false })
+      await vi.waitFor(() => {
+        expect(containers.runJob).toHaveBeenCalled()
+      })
+      await plugin.stop()
+      finishHelp()
+      await new Promise<void>((resolve) => setTimeout(resolve, 50))
+      expect(containers._calls.ensureRunning).toEqual([])
+      expect(app.radarApi.register).not.toHaveBeenCalled()
+    })
+
     it.each([['--mdns-hostname', 'radar'], ['--mdns-hostname=radar'], ['--no-mdns']])(
       'keeps the mDNS choice the user made in mayaraArgs (%s)',
       async (...mayaraArgs) => {
