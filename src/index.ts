@@ -5,7 +5,8 @@ import { Server as NetServer, type Socket } from 'net'
 import {
   getContainerManager as helperGetContainerManager,
   waitForContainerManager,
-  isValidImageTag
+  isValidImageTag,
+  classifyTag
 } from 'signalk-container-helper'
 import { MayaraClient } from './mayara-client.js'
 import { createGuiProxy } from './gui-proxy.js'
@@ -55,6 +56,9 @@ const RADAR_TARGET_EXPIRY_INTERVAL_MS = 5_000
 // Keeps the browser on the SK port (3000 / 443), so HTTPS works and
 // only one firewall port needs to be open.
 const GUI_PROXY_PATH = `/plugins/${PLUGIN_ID}/gui`
+const NO_MDNS_FLAG = '--no-mdns'
+const MDNS_HELP_TIMEOUT_S = 30
+const MDNS_ARGS = new Set([NO_MDNS_FLAG, '--mdns-hostname'])
 
 /**
  * Where `signalkDataMount` lands inside the container. signalk-container
@@ -154,6 +158,11 @@ export default function (app: MayaraServerAPI): Plugin {
   // alongside the new loop. A counter makes a superseded loop stay cancelled
   // forever, so only one acquisition is ever live.
   let tokenGeneration = 0
+  // Whether the image behind a tag accepts `--no-mdns`, read from its own
+  // `--help`: a cached `latest` can predate the flag, and an image that
+  // rejects an argument never starts. Kept per tag, so an update to another
+  // tag cannot replace what the running tag's probe found.
+  const noMdnsSupport = new Map<string, boolean>()
   let reconnectInterval: ReturnType<typeof setInterval> | null = null
   let isConnected = false
   // Appended to the "Connected" status line when a newer container image
@@ -487,6 +496,7 @@ export default function (app: MayaraServerAPI): Plugin {
         try {
           app.setPluginStatus(`Pulling mayara-server:${tag}...`)
           await containers.pullImage(`${MAYARA_IMAGE}:${tag}`)
+          noMdnsSupport.set(tag, await probeNoMdnsSupport(containers, tag))
 
           app.setPluginStatus('Recreating mayara-server container...')
           await containers.remove(CONTAINER_NAME)
@@ -757,6 +767,41 @@ export default function (app: MayaraServerAPI): Plugin {
   }
 
   /**
+   * Reads from the image's own `--help` whether it knows `--no-mdns`. A
+   * floating tag is pulled first, so the answer is about the image the
+   * container is about to run; offline, it is about the cached one.
+   * Anything that fails leaves the flag out, which every image accepts.
+   */
+  async function probeNoMdnsSupport(
+    containers: ContainerManagerApi,
+    tag: string
+  ): Promise<boolean> {
+    const image = `${MAYARA_IMAGE}:${tag}`
+    if (classifyTag(tag) === 'floating') {
+      try {
+        await containers.pullImage(image)
+      } catch (err) {
+        app.debug(`Could not refresh ${image} before reading its options: ${errMsg(err)}`)
+      }
+    }
+    let supported = false
+    try {
+      const help = await containers.runJob({
+        image,
+        command: ['mayara-server', '--help'],
+        timeout: MDNS_HELP_TIMEOUT_S,
+        label: 'mayara-server --help',
+        ownerPluginId: PLUGIN_ID
+      })
+      supported =
+        help.status === 'completed' && help.log.some((line) => line.includes(NO_MDNS_FLAG))
+    } catch (err) {
+      app.debug(`Could not read the options of ${image}: ${errMsg(err)}`)
+    }
+    return supported
+  }
+
+  /**
    * Build a ContainerConfig for the mayara-server container with the
    * given tag. Used at startup, when applying updates, and after a
    * background token mint completes — signalk-container drift-detects
@@ -836,6 +881,16 @@ export default function (app: MayaraServerAPI): Plugin {
       } else {
         injected.push('-n', `tcp:127.0.0.1:${tcpPort}`)
       }
+    }
+
+    // The container shares the host's network, where Avahi usually answers
+    // mDNS already. A second responder on UDP 5353 takes unicast queries
+    // meant for Avahi (Linux hands each to one socket only), and nothing
+    // needs mayara's own announcement here: its GUI is reached through
+    // Signal K.
+    const userSetsMdns = userArgs.some((a) => MDNS_ARGS.has(a.split('=')[0]))
+    if (!userSetsMdns && noMdnsSupport.get(tag) === true) {
+      injected.push(NO_MDNS_FLAG)
     }
 
     const command = ['mayara-server', ...injected, ...userArgs]
@@ -1068,7 +1123,9 @@ export default function (app: MayaraServerAPI): Plugin {
     )
   }
 
-  async function startManagedContainer(settings: Partial<Config>): Promise<void> {
+  /** Resolves false when a stop() or a newer start() superseded this start. */
+  async function startManagedContainer(settings: Partial<Config>): Promise<boolean> {
+    const myGeneration = tokenGeneration
     // Two-phase wait (global appears → runtime detection settles), from
     // signalk-container-helper. Unlike the hand-rolled version this replaced,
     // it distinguishes "signalk-container absent" from "present but no usable
@@ -1100,6 +1157,12 @@ export default function (app: MayaraServerAPI): Plugin {
     app.setPluginStatus('Starting mayara-server container...')
 
     const tag = settings.mayaraVersion ?? 'latest'
+    const supportsNoMdns = await probeNoMdnsSupport(containers, tag)
+    // The probe can take a pull plus a 30 s job; a stop() in that time must
+    // not be undone by starting the container it just stopped, nor its
+    // answer replace the one a newer start found.
+    if (myGeneration !== tokenGeneration) return false
+    noMdnsSupport.set(tag, supportsNoMdns)
     const config = buildContainerConfig(tag)
 
     // signalk-container ≥1.6.0 diffs ContainerConfig against the live
@@ -1150,6 +1213,7 @@ export default function (app: MayaraServerAPI): Plugin {
     }
 
     app.debug('mayara-server container ready')
+    return true
   }
 
   // ==========================================================================
@@ -1158,7 +1222,7 @@ export default function (app: MayaraServerAPI): Plugin {
 
   async function asyncStart(settings: Partial<Config>): Promise<void> {
     if (settings.managedContainer) {
-      await startManagedContainer(settings)
+      if (!(await startManagedContainer(settings))) return
     }
 
     client = new MayaraClient({
