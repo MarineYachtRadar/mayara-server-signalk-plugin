@@ -160,8 +160,8 @@ export default function (app: MayaraServerAPI): Plugin {
   let tokenGeneration = 0
   // Whether the image behind a tag accepts `--no-mdns`, read from its own
   // `--help`: a cached `latest` can predate the flag, and an image that
-  // rejects an argument never starts. Kept per tag, so a probe a stopped
-  // start finishes late cannot replace what the current tag's probe found.
+  // rejects an argument never starts. Kept per tag, so an update to another
+  // tag cannot replace what the running tag's probe found.
   const noMdnsSupport = new Map<string, boolean>()
   let reconnectInterval: ReturnType<typeof setInterval> | null = null
   let isConnected = false
@@ -496,7 +496,7 @@ export default function (app: MayaraServerAPI): Plugin {
         try {
           app.setPluginStatus(`Pulling mayara-server:${tag}...`)
           await containers.pullImage(`${MAYARA_IMAGE}:${tag}`)
-          await probeNoMdnsSupport(containers, tag)
+          noMdnsSupport.set(tag, await probeNoMdnsSupport(containers, tag))
 
           app.setPluginStatus('Recreating mayara-server container...')
           await containers.remove(CONTAINER_NAME)
@@ -772,7 +772,10 @@ export default function (app: MayaraServerAPI): Plugin {
    * container is about to run; offline, it is about the cached one.
    * Anything that fails leaves the flag out, which every image accepts.
    */
-  async function probeNoMdnsSupport(containers: ContainerManagerApi, tag: string): Promise<void> {
+  async function probeNoMdnsSupport(
+    containers: ContainerManagerApi,
+    tag: string
+  ): Promise<boolean> {
     const image = `${MAYARA_IMAGE}:${tag}`
     if (classifyTag(tag) === 'floating') {
       try {
@@ -795,7 +798,7 @@ export default function (app: MayaraServerAPI): Plugin {
     } catch (err) {
       app.debug(`Could not read the options of ${image}: ${errMsg(err)}`)
     }
-    noMdnsSupport.set(tag, supported)
+    return supported
   }
 
   /**
@@ -1154,10 +1157,12 @@ export default function (app: MayaraServerAPI): Plugin {
     app.setPluginStatus('Starting mayara-server container...')
 
     const tag = settings.mayaraVersion ?? 'latest'
-    await probeNoMdnsSupport(containers, tag)
+    const supportsNoMdns = await probeNoMdnsSupport(containers, tag)
     // The probe can take a pull plus a 30 s job; a stop() in that time must
-    // not be undone by starting the container it just stopped.
+    // not be undone by starting the container it just stopped, nor its
+    // answer replace the one a newer start found.
     if (myGeneration !== tokenGeneration) return false
+    noMdnsSupport.set(tag, supportsNoMdns)
     const config = buildContainerConfig(tag)
 
     // signalk-container ≥1.6.0 diffs ContainerConfig against the live
