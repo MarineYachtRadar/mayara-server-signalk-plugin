@@ -783,6 +783,96 @@ describe('mayara-server-signalk-plugin container integration', () => {
       expect(whenReadyOrder).toBeLessThan(ensureRunningOrder)
       await plugin.stop()
     })
+
+    // Cold podman on a Pi can take longer to detect than one wait lasts.
+    async function startWithoutRuntime() {
+      const containers = makeMockContainerManager()
+      let runtimeFound = false
+      containers.getRuntime = vi.fn(() =>
+        runtimeFound ? { runtime: 'podman' as const, version: '5.0.0' } : null
+      )
+      globalThis.__signalk_containerManager = containers
+      const app = makeMockApp()
+      vi.resetModules()
+      const mod = (await import('../src/index.js')) as unknown as {
+        default: (a: unknown) => LoadedPlugin['plugin']
+      }
+      const plugin = mod.default(app)
+      vi.useFakeTimers()
+      plugin.start({ managedContainer: true, mayaraVersion: 'latest', requestSignalkToken: false })
+      await vi.advanceTimersByTimeAsync(50)
+      const errors = () => app.setPluginError.mock.calls.map((c) => c[0] as string)
+      return { containers, plugin, errors, findRuntime: () => (runtimeFound = true) }
+    }
+
+    it('starts the container once a slow runtime detection finishes, without a restart', async () => {
+      const { containers, plugin, errors, findRuntime } = await startWithoutRuntime()
+      expect(errors().some((e) => e.includes('no usable container runtime'))).toBe(true)
+      expect(containers._calls.ensureRunning.length).toBe(0)
+
+      findRuntime()
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(containers._calls.ensureRunning.length).toBe(1)
+      await plugin.stop()
+    })
+
+    it('starts the container when detection outlasts one wait', async () => {
+      const { containers, plugin, findRuntime } = await startWithoutRuntime()
+      let finishDetection = () => {}
+      containers.whenReady = vi.fn(
+        () => new Promise<void>((resolve) => (finishDetection = resolve))
+      )
+      await vi.advanceTimersByTimeAsync(45_000)
+      expect(containers._calls.ensureRunning.length).toBe(0)
+
+      findRuntime()
+      finishDetection()
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(containers._calls.ensureRunning.length).toBe(1)
+      await plugin.stop()
+    })
+
+    it('does not carry on with a start that stopped while the container was starting', async () => {
+      const { containers, plugin, findRuntime } = await startWithoutRuntime()
+      let containerUp = () => {}
+      containers.ensureRunning = vi.fn(
+        () => new Promise<void>((resolve) => (containerUp = resolve))
+      )
+      findRuntime()
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(containers.ensureRunning).toHaveBeenCalledTimes(1)
+
+      await plugin.stop()
+      containerUp()
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(containers._calls.updateRegistrations.length).toBe(0)
+    })
+
+    it('stops waiting while detection is still running', async () => {
+      const { containers, plugin, findRuntime } = await startWithoutRuntime()
+      let finishDetection = () => {}
+      containers.whenReady = vi.fn(
+        () => new Promise<void>((resolve) => (finishDetection = resolve))
+      )
+      await vi.advanceTimersByTimeAsync(10_000)
+      await plugin.stop()
+
+      findRuntime()
+      finishDetection()
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(containers._calls.ensureRunning.length).toBe(0)
+    })
+
+    it('stops waiting for a runtime when the plugin stops', async () => {
+      const { containers, plugin, errors, findRuntime } = await startWithoutRuntime()
+      await plugin.stop()
+      const errorsAtStop = errors().length
+
+      findRuntime()
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(containers._calls.ensureRunning.length).toBe(0)
+      expect(errors().length).toBe(errorsAtStop)
+    })
   })
 
   describe('update service registration', () => {
