@@ -167,7 +167,7 @@ export default function (app: MayaraServerAPI): Plugin {
   // rejects an argument never starts. Kept per tag, so an update to another
   // tag cannot replace what the running tag's probe found.
   const noMdnsSupport = new Map<string, boolean>()
-  // Ends the wait for signalk-container that the start it belongs to began.
+  // Ends the start it belongs to once stop() or a newer start() supersedes it.
   let startAbort = new AbortController()
   let reconnectInterval: ReturnType<typeof setInterval> | null = null
   let isConnected = false
@@ -217,6 +217,7 @@ export default function (app: MayaraServerAPI): Plugin {
       // start (a fast disable/enable or config save) so only the loop this
       // start launches is live.
       tokenGeneration++
+      startAbort.abort()
       startAbort = new AbortController()
       const { signal } = startAbort
       collisionAlerts.start(app)
@@ -1138,7 +1139,6 @@ export default function (app: MayaraServerAPI): Plugin {
     settings: Partial<Config>,
     signal: AbortSignal
   ): Promise<boolean> {
-    const myGeneration = tokenGeneration
     const containers = await waitForUsableContainerManager(signal)
     if (signal.aborted) return false
 
@@ -1150,7 +1150,7 @@ export default function (app: MayaraServerAPI): Plugin {
     // The probe can take a pull plus a 30 s job; a stop() in that time must
     // not be undone by starting the container it just stopped, nor its
     // answer replace the one a newer start found.
-    if (myGeneration !== tokenGeneration) return false
+    signal.throwIfAborted()
     noMdnsSupport.set(tag, supportsNoMdns)
     const config = buildContainerConfig(tag)
 
