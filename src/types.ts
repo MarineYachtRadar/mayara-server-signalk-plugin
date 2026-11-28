@@ -28,6 +28,7 @@ export interface MayaraServerAPI extends ServerAPI {
 export type {
   ContainerConfig,
   ContainerInfo,
+  ContainerJobConfig,
   ContainerManagerApi,
   ContainerResourceLimits,
   ContainerRuntimeInfo,

@@ -3,6 +3,7 @@ import { readFileSync, rmSync } from 'fs'
 import { join } from 'path'
 import type {
   ContainerConfig,
+  ContainerJobConfig,
   ContainerManagerApi,
   ContainerResourceLimits,
   UpdateCheckResult,
@@ -118,6 +119,8 @@ interface MockContainerManager extends ContainerManagerApi {
   }
   // Allow tests to control what checkOne returns
   _nextCheckResult: UpdateCheckResult | null
+  // What `mayara-server --help` prints; null makes the job fail.
+  _helpLog: string[] | null
 }
 
 function makeMockContainerManager(): MockContainerManager {
@@ -148,6 +151,18 @@ function makeMockContainerManager(): MockContainerManager {
   const mock: MockContainerManager = {
     _calls: calls,
     _nextCheckResult: null,
+    _helpLog: ['      --no-mdns  Do not advertise on mDNS at all'],
+    runJob: vi.fn((config: ContainerJobConfig) =>
+      Promise.resolve({
+        id: 'job',
+        image: config.image,
+        command: config.command,
+        status: mock._helpLog ? ('completed' as const) : ('failed' as const),
+        exitCode: mock._helpLog ? 0 : 1,
+        log: mock._helpLog ?? ['error: image not found'],
+        createdAt: new Date().toISOString()
+      })
+    ),
     getRuntime: () => ({
       runtime: 'podman',
       version: '5.0.0'
@@ -356,9 +371,13 @@ async function loadPlugin(
   // Fake timers from start() on, for tests that watch the reconnect cadence:
   // the shortest valid reconnect interval is a second. They switch on after
   // the import above, which needs real I/O.
-  { fakeTimers = false }: { fakeTimers?: boolean } = {}
+  {
+    fakeTimers = false,
+    helpLog
+  }: { fakeTimers?: boolean; helpLog?: MockContainerManager['_helpLog'] } = {}
 ): Promise<LoadedPlugin> {
   const containers = makeMockContainerManager()
+  if (helpLog !== undefined) containers._helpLog = helpLog
   globalThis.__signalk_containerManager = containers
 
   const app = makeMockApp(appConfig)
@@ -548,23 +567,53 @@ describe('mayara-server-signalk-plugin container integration', () => {
     })
 
     // Host networking puts mayara's mDNS responder next to the host's Avahi.
-    it.each(['latest', 'main', 'v3.9.0', '3.17.6'])(
-      'leaves mDNS to the host on mayara %s',
-      async (mayaraVersion) => {
-        const { containers, plugin } = await loadPlugin({ mayaraVersion })
-        expect(containers._calls.ensureRunning[0].config.command).toContain('--no-mdns')
-        await plugin.stop()
-      }
-    )
+    it('leaves mDNS to the host when the image knows --no-mdns', async () => {
+      const { containers, plugin } = await loadPlugin({ mayaraVersion: 'v3.17.6' })
+      expect(containers._calls.ensureRunning[0].config.command).toContain('--no-mdns')
+      await plugin.stop()
+    })
 
-    it.each(['v3.8.2', '3.4.0'])(
-      'does not pass --no-mdns to mayara %s, which rejects it',
-      async (mayaraVersion) => {
-        const { containers, plugin } = await loadPlugin({ mayaraVersion })
-        expect(containers._calls.ensureRunning[0].config.command).not.toContain('--no-mdns')
-        await plugin.stop()
+    // A cached `latest` can predate the flag, and an image that rejects an
+    // argument never starts.
+    it.each([
+      ['does not list it', ['  -n, --navigation-address <ADDR>']],
+      ['cannot be asked', null]
+    ])('leaves the flag out when the image %s', async (_case, helpLog) => {
+      const { containers, plugin } = await loadPlugin({}, undefined, { helpLog })
+      expect(containers._calls.ensureRunning[0].config.command).not.toContain('--no-mdns')
+      await plugin.stop()
+    })
+
+    it('asks the image the container will run, refreshing a floating tag first', async () => {
+      const { containers, plugin } = await loadPlugin({ mayaraVersion: 'latest' })
+      const pull = vi.mocked(containers.pullImage).mock.invocationCallOrder[0]
+      const help = vi.mocked(containers.runJob).mock.invocationCallOrder[0]
+      expect(containers._calls.pullImage).toEqual(['ghcr.io/marineyachtradar/mayara-server:latest'])
+      expect(pull).toBeLessThan(help)
+      expect(vi.mocked(containers.runJob).mock.calls[0][0]).toMatchObject({
+        image: 'ghcr.io/marineyachtradar/mayara-server:latest',
+        command: ['mayara-server', '--help']
+      })
+      await plugin.stop()
+    })
+
+    it('still asks the cached image when the refresh fails offline', async () => {
+      const containers = makeMockContainerManager()
+      containers.pullImage = vi.fn(() => Promise.reject(new Error('getaddrinfo ENOTFOUND ghcr.io')))
+      globalThis.__signalk_containerManager = containers
+      const app = makeMockApp()
+      vi.resetModules()
+      const mod = (await import('../src/index.js')) as unknown as {
+        default: (a: unknown) => LoadedPlugin['plugin']
       }
-    )
+      const plugin = mod.default(app)
+      plugin.start({ managedContainer: true, mayaraVersion: 'latest', requestSignalkToken: false })
+      await vi.waitFor(() => {
+        expect(containers._calls.ensureRunning.length).toBe(1)
+      })
+      expect(containers._calls.ensureRunning[0].config.command).toContain('--no-mdns')
+      await plugin.stop()
+    })
 
     it.each([['--mdns-hostname', 'radar'], ['--mdns-hostname=radar'], ['--no-mdns']])(
       'keeps the mDNS choice the user made in mayaraArgs (%s)',
