@@ -160,8 +160,9 @@ export default function (app: MayaraServerAPI): Plugin {
   let tokenGeneration = 0
   // Whether the image behind a tag accepts `--no-mdns`, read from its own
   // `--help`: a cached `latest` can predate the flag, and an image that
-  // rejects an argument never starts.
-  let noMdnsSupport: { tag: string; supported: boolean } | null = null
+  // rejects an argument never starts. Kept per tag, so a probe a stopped
+  // start finishes late cannot replace what the current tag's probe found.
+  const noMdnsSupport = new Map<string, boolean>()
   let reconnectInterval: ReturnType<typeof setInterval> | null = null
   let isConnected = false
   // Appended to the "Connected" status line when a newer container image
@@ -794,7 +795,7 @@ export default function (app: MayaraServerAPI): Plugin {
     } catch (err) {
       app.debug(`Could not read the options of ${image}: ${errMsg(err)}`)
     }
-    noMdnsSupport = { tag, supported }
+    noMdnsSupport.set(tag, supported)
   }
 
   /**
@@ -885,7 +886,7 @@ export default function (app: MayaraServerAPI): Plugin {
     // needs mayara's own announcement here: its GUI is reached through
     // Signal K.
     const userSetsMdns = userArgs.some((a) => MDNS_ARGS.has(a.split('=')[0]))
-    if (!userSetsMdns && noMdnsSupport?.tag === tag && noMdnsSupport.supported) {
+    if (!userSetsMdns && noMdnsSupport.get(tag) === true) {
       injected.push(NO_MDNS_FLAG)
     }
 

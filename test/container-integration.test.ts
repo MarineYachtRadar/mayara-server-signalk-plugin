@@ -644,6 +644,67 @@ describe('mayara-server-signalk-plugin container integration', () => {
       expect(app.radarApi.register).not.toHaveBeenCalled()
     })
 
+    it("keeps the current tag's answer when a stopped start's probe finishes late", async () => {
+      const tokenModule = await loadTokenMock()
+      vi.mocked(tokenModule.beginTokenRequest).mockResolvedValue({
+        kind: 'pending',
+        requestId: 'r-1',
+        href: '/signalk/v1/requests/r-1'
+      })
+      let approve: (token: string) => void = () => undefined
+      vi.mocked(tokenModule.awaitApproval).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            approve = resolve
+          })
+      )
+      let cached: string | undefined
+      vi.mocked(tokenModule.readCachedToken).mockImplementation(() => cached)
+      vi.mocked(tokenModule.writeCachedToken).mockImplementation((_dir, token) => {
+        cached = token
+      })
+
+      const containers = makeMockContainerManager()
+      let finishOldHelp: () => void = () => undefined
+      containers.runJob = vi.fn((config: ContainerJobConfig) =>
+        config.image.endsWith(':latest')
+          ? new Promise((resolve) => {
+              finishOldHelp = () => {
+                resolve({ status: 'completed' as const, exitCode: 0, log: ['  -n <ADDR>'] })
+              }
+            })
+          : Promise.resolve({ status: 'completed' as const, exitCode: 0, log: ['--no-mdns'] })
+      )
+      globalThis.__signalk_containerManager = containers
+      const app = makeMockApp()
+      vi.resetModules()
+      const mod = (await import('../src/index.js')) as unknown as {
+        default: (a: unknown) => LoadedPlugin['plugin']
+      }
+      const plugin = mod.default(app)
+      plugin.start({ managedContainer: true, mayaraVersion: 'latest', requestSignalkToken: false })
+      await vi.waitFor(() => {
+        expect(containers.runJob).toHaveBeenCalled()
+      })
+      await plugin.stop()
+      plugin.start({ managedContainer: true, mayaraVersion: 'v3.17.6', requestSignalkToken: true })
+      await vi.waitFor(() => {
+        expect(tokenModule.awaitApproval).toHaveBeenCalled()
+      })
+
+      finishOldHelp()
+      await new Promise<void>((resolve) => setTimeout(resolve, 20))
+      approve('approved-jwt')
+      await vi.waitFor(() => {
+        expect(containers._calls.ensureRunning.length).toBe(2)
+      })
+      expect(containers._calls.ensureRunning[1].config.tag).toBe('v3.17.6')
+      expect(containers._calls.ensureRunning[1].config.command).toContain('--no-mdns')
+
+      vi.mocked(tokenModule.readCachedToken).mockReturnValue(undefined)
+      await plugin.stop()
+    })
+
     it.each([['--mdns-hostname', 'radar'], ['--mdns-hostname=radar'], ['--no-mdns']])(
       'keeps the mDNS choice the user made in mayaraArgs (%s)',
       async (...mayaraArgs) => {
